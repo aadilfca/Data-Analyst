@@ -10494,3 +10494,17 @@ The synthetic Transaction Report staged with 7/7 columns mapped, two eligible de
 ## C# import receipt template permissions — 2026-11-21
 
 Receipt creation now reads the current template definition without row locks, matching the restricted runtime role's read-only grants, and compares its configuration key with the validated source before recording evidence. The focused test adds a SELECT-only role and checks that definition reads work while lock requests fail. The test-project build passed with zero warnings/errors; the integration test could not start its local PostgreSQL fixture because `pg_ctl` failed. Fresh upload acceptance remains pending.
+
+## C# frontend ownership and root-static removal — Phase 3B/3C — 2026-11-23
+
+Phase 3B copied 20 active pages and 26 required assets into `dotnet-uploader/frontend/`. The C# copies use local SortableJS and SheetJS assets and contain no Google Drive UI, API calls, or external CDN dependencies. Python `static/` files remain unchanged. Phase 3C changed `ApplicationShellMiddleware` to serve only `ShellFrontend`, removed root-static inputs from the API project and Docker image, and added a C# unavailable notice for the retired Client Settings link. The File Map was updated; `AGENTS.md` now identifies the repository-local SDK.
+
+The Docker image built and published successfully with the repository-local .NET SDK 10.0.404. Image inspection confirmed `ShellStatic` and `client_settings.js` are absent while the C# notice and local spreadsheet library are present. An isolated runtime check returned 200 for login and the spreadsheet library, redirected the protected Client Settings page to login without a session, and returned 404 for the retired script; the temporary container was stopped.
+
+The supplied HAR confirms the browser was using the C# shell/API but an older frontend package: it returned the 603-byte legacy `client_settings.js` and the 92,818-byte root `client_context.js` rather than the 92,731-byte C# copy. The current port 5080 instance is stopped/unavailable in this environment, and no running Docker app container was found. Deployment/restart and Aadil's acceptance on the actual local app remain pending. No commit or push occurred.
+
+## Revised C# independence phases — 2026-11-23
+
+Kept the original eight phase categories and recorded Phase 3D route/package verification as complete. Phases 4 (clean setup/package launch) and 5 (audit Python-only utilities and prepare .NET/SQL replacements) remain. To honor Aadil's later instruction to keep Python through the comparison, Phase 7 is split: 7A runs a clean `dotnet-uploader` copy with Python unavailable; 7B compares Python/C# fetching on the same data and conditions while preserving Python; Phase 6 removal follows only after both pass and Aadil accepts the results; 7C performs the final source/package scan and clean C# launch after removal. Phase 8 section review starts only after that gate, one section at a time, with incomplete sections unavailable.
+
+Phase 4 must document non-Python runtime requirements, including PostgreSQL and protected configuration, so “Python-free” is not mistaken for “no database or credentials needed.” The Phase 3B/3C combined commit remains a separate closeout after local acceptance and an approved commit message. No Python source, data or Git history was changed by this plan update.

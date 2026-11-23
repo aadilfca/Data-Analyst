@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Settings</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        .settings-group {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .settings-group h3 {
+            font-size: 16px;
+            color: #1a1a2e;
+            margin-bottom: 12px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+        }
+
+        .setting-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px 20px;
+            padding: 8px 0;
+        }
+
+        .setting-row label {
+            font-weight: 600;
+            font-size: 14px;
+            color: #475569;
+            min-width: 180px;
+        }
+
+        .setting-row select,
+        .setting-row input {
+            padding: 6px 12px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            min-width: 160px;
+        }
+
+        .setting-row .hint {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .save-btn {
+            padding: 8px 24px;
+            background: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .save-btn:hover {
+            background: #16a34a;
+        }
+
+        #uploadBackupsPanel input[type="checkbox"] { min-width:0; width:18px; height:18px; }
+        #uploadBackupsPanel label { display:flex; align-items:center; gap:10px; }
+        #uploadBackupsPanel p { color:#475569; font-size:13px; }
+
+        #statusMessage {
+            margin-top: 12px;
+        }
+
+        /* Holiday list rows (Phase 2: Holiday calendar management UI) */
+        .holiday-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+
+        .holiday-row:last-child {
+            border-bottom: none;
+        }
+
+        .holiday-row .holiday-date {
+            font-weight: 600;
+            color: #1a1a2e;
+            min-width: 110px;
+        }
+
+        .holiday-row .holiday-label {
+            flex: 1;
+            color: #334155;
+        }
+
+        .holiday-row .holiday-yearly-badge {
+            font-size: 11px;
+            font-weight: 600;
+            color: #1e40af;
+            background: #dbeafe;
+            border-radius: 999px;
+            padding: 2px 10px;
+        }
+
+        .holiday-row .delete-holiday-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 15px;
+            padding: 4px;
+        }
+
+        .holiday-empty-hint {
+            font-size: 13px;
+            color: #94a3b8;
+            padding: 8px 0;
+        }
+
+        /* The Admin tab strip's rules used to live here. They are now shared across all three
+           Admin pages as .firm-tabs/.firm-tab in style.css - see renderFirmLevelTabs(). */
+    </style>
+</head>
+
+<body data-nav-module="App Settings">
+    <!-- Firm-level navbar. This page is not client-scoped, so it deliberately does NOT use the
+         shared client header (#navLeft/#clientControl/.nav-user) every client-scoped page carries -
+         no client pill, no 🏢 dashboard icon, no ⊞ quick-nav, no search, no back/up arrows. The
+         single #firmNav container below is filled by renderFirmLevelNav() in client_context.js.
+         data-nav-parent is deliberately absent: the Up arrow no longer renders here, and its old
+         value (setup.html) pointed into client territory. -->
+    <nav class="navbar firm-navbar">
+        <div class="nav-container" id="firmNav">
+            <!-- Will be rendered by client_context.js -->
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <header class="module-header">
+            <h1>⚙️ Settings</h1>
+            <p>Configure global settings and manage firm-level administration</p>
+        </header>
+
+        <!-- Admin area tab strip. Deliberately empty: the tabs, their active state and their
+             admin-only gating are all rendered by renderFirmLevelTabs() in client_context.js, the
+             same way this page's navbar is rendered by renderFirmLevelNav(). Do not hardcode tab
+             markup back in here - it existing only on this page is precisely what made the strip
+             vanish on clients.html/users.html. -->
+        <div class="firm-tabs" id="firmTabs"></div>
+
+        <div id="tabPanelAppSettings">
+            <div class="settings-group" id="uploadBackupsPanel" hidden>
+                <h3>Upload backups</h3>
+                <label><input type="checkbox" id="uploadBackupRequired" checked disabled>
+                    Require a recovery copy before replacement</label>
+                <p>On: a recovery copy is required before replacing existing records.</p>
+                <p>Off: uploads can proceed without a separate recovery copy.</p>
+                <p>Applies to all clients and servers using this database.</p>
+                <button class="save-btn" id="saveUploadBackupsBtn" type="button" disabled>Save Upload Backup Setting</button>
+                <p id="uploadBackupsStatus" role="status" aria-live="polite"></p>
+            </div>
+            <div id="settingsContainer">
+                <!-- Settings will be loaded by JavaScript -->
+            </div>
+
+            <!-- Firm-wide Holidays (Phase 2 of the Client Data Availability & Coverage Redesign) -->
+            <div id="cashflowDefaultsContainer"></div>
+
+            <div class="settings-group">
+                <h3>🗓️ Firm-wide Holidays</h3>
+                <p class="hint" style="margin-bottom:12px;">
+                    Sundays are excluded automatically. Add public/religious holidays here (lunar holidays like Eid/Muharram shift every year — re-add them each year; fixed-date holidays like Pakistan Day can be marked "Repeats yearly").
+                </p>
+                <div class="setting-row">
+                    <input type="date" id="holidayDateInput">
+                    <input type="text" id="holidayLabelInput" placeholder="e.g. Eid-ul-Fitr">
+                    <label style="min-width:auto; font-weight:normal;">
+                        <input type="checkbox" id="holidayRepeatsYearly"> Repeats yearly
+                    </label>
+                    <button class="save-btn" id="addHolidayBtn">+ Add Holiday</button>
+                </div>
+                <div id="holidayListContainer">
+                    <!-- Holiday rows rendered by settings.js -->
+                </div>
+            </div>
+
+            <p id="settingsReadOnlyNotice" hidden>Only your workspace administrator can change these settings.</p>
+            <div id="statusMessage" class="upload-status" style="display:none;"></div>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/settings.js?v=7"></script>
+</body>
+
+</html>

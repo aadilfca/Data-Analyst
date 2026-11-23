@@ -4,6 +4,10 @@
 
 This file is the entry point for Codex when working in this repository. The application is an internal audit platform maintained by a Chartered Accountant who is not a software developer. Communicate decisions and tradeoffs in clear, plain language.
 
+## Local tooling
+
+Use `dotnet-uploader/.dotnet/dotnet.exe` for .NET commands; check this repository-local SDK before concluding that .NET is unavailable. Use Docker for container builds when its daemon is running.
+
 ## Authoritative project guidance
 
 Before investigating, planning, reviewing, or changing the project, read `CLAUDE.md` in full. Treat its current contents as the authoritative source for:

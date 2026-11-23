@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audit Workbook</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+</head>
+
+<!-- Audit Workbook — several overlapping change sets: the earlier 2-phase "restyle" (Sr/Voucher
+     No. columns replacing the old banner row, then lighter styling in style.css); the 3-phase
+     "restructure" (backend account_name lookup; Sr/Voucher No./Account rendered via real HTML
+     rowspan — one <td> per voucher group, not a blank/repeated-text cell per line — with Account
+     merged into a code+name stacked cell; grouping visual treatment in CSS); a later, single-phase
+     "add a Date column" fix — a new Date <th>/<td> inserted between Voucher No. and Account (9
+     columns total: Sr, Voucher No., Date, Account, Reference, Amount, Procedures, Observations,
+     Status), same rowspan-once-per-voucher-group treatment as Sr/Voucher No./Account, formatted
+     via utils.js's formatDate() (loaded below, same page-load convention as static/script.js's own
+     use of it — no initUtils() call, so it falls back to formatDate()'s own DD/MM/YYYY default
+     rather than the user's configured date_format setting); and this latest, single-phase "compact
+     header" fix — the old h1 title + separate subtitle <p> + standalone filter-chips row are
+     replaced by one .aw-header-bar row (session info left, filter chips right, see below). Table
+     structure/awTableBody rendering is completely unaffected by this latest change. This markup
+     deliberately reuses only already-existing global classes
+     (.voucher-line-procedures-badge/.voucher-line-obs-flag/etc. from the Verification module,
+     .aw-status-badge/.aw-row-clickable already defined below in style.css). -->
+
+<body data-nav-module="Audit Workbook" data-nav-parent="verification.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <!-- Peer nav bar (Phase 5, FINAL) — mirrors verification.js's own #cashbookBar
+                 button pair. "Verification" returns to this exact session (?state=session&id=,
+                 same restore path Phase 4's row-click already reuses), not just the generic
+                 verification.html landing page a plain link would have gone to. "Audit Workbook"
+                 is a static "you are here" indicator (not a real link) since we're already on
+                 this page. Both start disabled — audit_workbook.js enables/wires the
+                 Verification button once a valid ?session= is confirmed on load. -->
+            <div class="aw-nav-buttons">
+                <button type="button" class="btn-cashbook" id="awVerificationBtn" disabled><span
+                        class="btn-icon">✅</span> Verification</button>
+                <span class="btn-cashbook active"><span class="btn-icon">📗</span> Audit Workbook</span>
+            </div>
+        </header>
+
+        <!-- Compact header row (confirmed fix): session info left, status filter chips right.
+             The page-level "📗 Audit Workbook" h1 + separate subtitle line this replaces were
+             dropped entirely — the top navbar (data-nav-module="Audit Workbook") already names
+             this page. #awSubtitle keeps its id/behavior unchanged (audit_workbook.js still just
+             sets its textContent to "X voucher(s), Y line(s)" — no session number prefix, no JS
+             structural change needed); the outline icon beside it is a static, page-load-only visual
+             (confirmed over keeping the 📗 emoji here — the emoji is kept everywhere else on the
+             page, e.g. the peer nav button above). Filter chips are unchanged in id/data-status/
+             click-handling — only their container moved to sit in this same row; All is active by
+             default, non-functional markup only (audit_workbook.js wires the click handlers). -->
+        <div class="aw-header-bar">
+            <div class="aw-header-session">
+                <svg class="aw-header-session-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path
+                        d="M9 3h6a1 1 0 0 1 1 1v1h1.5A1.5 1.5 0 0 1 19 6.5v13A1.5 1.5 0 0 1 17.5 21h-11A1.5 1.5 0 0 1 5 19.5v-13A1.5 1.5 0 0 1 6.5 5H8V4a1 1 0 0 1 1-1Z" />
+                    <path d="M9 3v3h6V3" />
+                    <path d="m9 13 2 2 4-4" />
+                </svg>
+                <span id="awSubtitle">Read-only, voucher-level list of verification results for a session.</span>
+            </div>
+            <div class="aw-filter-chips">
+                <button type="button" class="aw-filter-chip active" id="awFilterAll" data-status="all">All</button>
+                <button type="button" class="aw-filter-chip" id="awFilterCleared" data-status="Cleared">Cleared</button>
+                <button type="button" class="aw-filter-chip" id="awFilterQuery" data-status="Query">Query</button>
+                <button type="button" class="aw-filter-chip" id="awFilterPending" data-status="Pending">Pending</button>
+            </div>
+        </div>
+
+        <!-- Procedures-pill wiring phase: status feedback for actions taken inside the shared
+             procedure modal (opened from a line's Procedures pill) - same #verificationStatus/
+             .upload-status convention verification.html already uses, this page just had nothing
+             yet. audit_workbook.js's own showStatus-equivalent writes into this. -->
+        <div id="awStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
+
+        <!-- Table: Sr / Voucher No. / Account / Reference / Amount / Procedures / Observations /
+             Status, line-grain. Sr appears only on a voucher's first line; Voucher No. repeats on
+             every line of that voucher. An optional subtotal row follows any voucher with more
+             than one line. awTableBody's rows are entirely JS-rendered from the Phase 1 endpoint —
+             the row below is just the initial loading state so nothing stale flashes before the
+             script runs. -->
+        <div class="aw-table-wrapper">
+            <!-- Fetch-in-flight spinner overlay (Voucher No. -> Audit Workbook deep-link fix): a
+                 full-cover overlay, not a spinner row inside #awTableBody, so row-insertion + the
+                 instant scroll-to-target both happen underneath it, completely hidden — the user's
+                 first visible frame without this overlay is already scrolled to the right voucher.
+                 Visible by default (no "hidden" class) so it also covers page paint before the
+                 fetch even starts; audit_workbook.js only adds the "hidden" class once BOTH the
+                 data has loaded AND the target row has already been scrolled into view. -->
+            <div class="aw-spinner-overlay" id="awSpinnerOverlay">
+                <div class="aw-loading">
+                    <span class="aw-spinner" aria-hidden="true"></span>
+                    <span>Loading vouchers…</span>
+                </div>
+            </div>
+            <table class="aw-table">
+                <thead>
+                    <tr>
+                        <th>Sr</th>
+                        <th>Voucher No.</th>
+                        <th>Date</th>
+                        <th>Account</th>
+                        <th>Reference</th>
+                        <th>Amount</th>
+                        <th>Procedures</th>
+                        <th>Observations</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="awTableBody">
+                </tbody>
+                <tfoot>
+                    <tr class="aw-total-row">
+                        <td colspan="5">Total</td>
+                        <td id="awTotalAmount">0.00</td>
+                        <td colspan="2"></td>
+                        <td></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/utils.js?v=2"></script>
+    <!-- Procedures-pill wiring phase: shared Supporting-Document/procedure modal component. Loads
+         before audit_workbook.js (which references its openProcedureModal()/flushProcedureObservations()/
+         flushAccountHeadNoMatchNote()/ensureVoucherChecksLoaded() by name, classic-script shared-
+         global-scope convention) and self-installs its own #procedureModal/#procedureBrowseModal/
+         #voucherVerifyToast markup on load - no HTML of its own needed here. See
+         static/procedure_modal.js's own header comment for the adapter contract audit_workbook.js's
+         buildAuditWorkbookAdapter() satisfies. -->
+        <script src="/static/procedure_modal.js?v=38"></script>
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/audit_workbook.js?v=9"></script>
+</body>
+
+</html>

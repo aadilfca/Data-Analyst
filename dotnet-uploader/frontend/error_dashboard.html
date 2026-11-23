@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        /* Additional styles for Error Dashboard */
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px 30px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 16px 24px;
+            margin-bottom: 20px;
+        }
+
+        .stats-bar .stat-item {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-size: 14px;
+            color: #475569;
+        }
+
+        .stats-bar .stat-item strong {
+            font-size: 24px;
+            color: #1a1a2e;
+        }
+
+        .stats-bar .stat-item .badge {
+            font-size: 12px;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .badge.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge.resolved {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .badge.total {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        .filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            background: white;
+            padding: 12px 16px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            align-items: center;
+        }
+
+        .filter-bar .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .filter-bar label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #64748b;
+        }
+
+        .filter-bar select,
+        .filter-bar input {
+            padding: 4px 8px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            background: white;
+        }
+
+        .filter-bar button {
+            padding: 4px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .filter-bar .btn-apply {
+            background: #3b82f6;
+            color: white;
+        }
+
+        .filter-bar .btn-clear {
+            background: #e2e8f0;
+            color: #1a1a2e;
+        }
+
+        .error-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .error-table th {
+            background: #f8fafc;
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #e2e8f0;
+            color: #475569;
+        }
+
+        .error-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f0f2f5;
+            vertical-align: middle;
+        }
+
+        .error-table tr:hover td {
+            background: #fafcff;
+        }
+
+        .severity-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .severity-fatal {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .severity-error {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .severity-warning {
+            background: #fef9e7;
+            color: #92400e;
+        }
+
+        .severity-info {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .status-resolved {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-pending {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .action-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 4px;
+        }
+
+        .action-btn.view {
+            color: #3b82f6;
+        }
+
+        .action-btn.resolve {
+            color: #16a34a;
+        }
+
+        .action-btn.delete {
+            color: #dc2626;
+        }
+
+        .action-btn:hover {
+            opacity: 0.7;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 16px;
+            align-items: center;
+        }
+
+        .pagination button {
+            padding: 4px 16px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .pagination button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Modal for details */
+        .detail-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .detail-modal.active {
+            display: flex;
+        }
+
+        .detail-modal .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 800px;
+            max-height: 85%;
+            overflow: auto;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .detail-modal .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .detail-modal .modal-header h2 {
+            font-size: 20px;
+            margin: 0;
+        }
+
+        .detail-modal .modal-close {
+            background: none;
+            border: none;
+            font-size: 28px;
+            cursor: pointer;
+            color: #94a3b8;
+        }
+
+        .detail-modal .detail-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 6px 16px;
+            margin-bottom: 12px;
+        }
+
+        .detail-modal .detail-grid .label {
+            font-weight: 600;
+            color: #64748b;
+            font-size: 13px;
+        }
+
+        .detail-modal .detail-grid .value {
+            font-size: 13px;
+            word-break: break-word;
+        }
+
+        .detail-modal .code-block {
+            background: #f1f5f9;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            max-height: 200px;
+            overflow: auto;
+        }
+
+        .detail-modal .resolve-section {
+            margin-top: 16px;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 16px;
+        }
+
+        .detail-modal .resolve-section textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 13px;
+            min-height: 60px;
+        }
+
+        .detail-modal .resolve-section button {
+            margin-top: 8px;
+            padding: 6px 20px;
+            background: #16a34a;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .detail-modal .resolve-section button:hover {
+            background: #15803d;
+        }
+
+        .no-data {
+            padding: 40px;
+            text-align: center;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+
+<body data-nav-module="Error Log" data-nav-parent="setup.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/setup.html" class="back-link">← Back to Setup</a>
+            <h1>📋 Error Dashboard</h1>
+            <p>View, filter, and resolve system errors</p>
+        </header>
+
+        <!-- Stats Cards -->
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-item">📊 Total Errors: <strong id="totalErrors">0</strong></div>
+            <div class="stat-item">⏳ Pending: <strong id="pendingErrors">0</strong> <span
+                    class="badge pending">Pending</span></div>
+            <div class="stat-item">✅ Resolved: <strong id="resolvedErrors">0</strong> <span
+                    class="badge resolved">Resolved</span></div>
+            <div class="stat-item" id="categoryStats" style="flex:1; min-width:200px;"></div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filter-bar">
+            <div class="filter-group">
+                <label>Module</label>
+                <select id="filterModule">
+                    <option value="">All</option>
+                    <option value="Upload">Upload</option>
+                    <option value="DataBank">DataBank</option>
+                    <option value="Setup">Setup</option>
+                    <option value="HTTP">HTTP</option>
+                    <option value="Unknown">Unknown</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Category</label>
+                <select id="filterCategory">
+                    <option value="">All</option>
+                    <option value="Syntax">Syntax</option>
+                    <option value="Import">Import</option>
+                    <option value="Database">Database</option>
+                    <option value="Network">Network</option>
+                    <option value="Validation">Validation</option>
+                    <option value="System">System</option>
+                    <option value="Unknown">Unknown</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Status</label>
+                <select id="filterResolved">
+                    <option value="">All</option>
+                    <option value="false">Pending</option>
+                    <option value="true">Resolved</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>Search</label>
+                <input type="text" id="filterSearch" placeholder="Error message or file..." style="width:160px;">
+            </div>
+            <div class="filter-group">
+                <label>From</label>
+                <input type="date" id="filterStartDate">
+                <label>To</label>
+                <input type="date" id="filterEndDate">
+            </div>
+            <button class="btn-apply" id="applyFiltersBtn">Apply</button>
+            <button class="btn-clear" id="clearFiltersBtn">Clear</button>
+        </div>
+
+        <!-- Error Table -->
+        <div style="background:white; border-radius:16px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+            <table class="error-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Code</th>
+                        <th>Message</th>
+                        <th>Category</th>
+                        <th>Module</th>
+                        <th>Status</th>
+                        <th>Date</th>
+                        <th style="text-align:center;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="errorTableBody">
+                    <!-- Rows inserted by JavaScript -->
+                </tbody>
+            </table>
+            <div id="noDataMessage" class="no-data" style="display:none;">No errors found.</div>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="paginationControls">
+            <button id="prevPageBtn" disabled>Previous</button>
+            <span id="pageInfo">Page 1 of 1</span>
+            <button id="nextPageBtn" disabled>Next</button>
+        </div>
+
+        <!-- Status Message -->
+        <div id="statusMessage" class="upload-status" style="margin-top:20px; display:none;"></div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- DETAIL MODAL (for viewing full error details) -->
+    <!-- ============================================= -->
+    <div id="detailModal" class="detail-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Error Details</h2>
+                <button class="modal-close" id="closeModalBtn">&times;</button>
+            </div>
+            <div id="modalBody">
+                <!-- Dynamic content -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/error_dashboard.js?v=1"></script>
+</body>
+
+</html>

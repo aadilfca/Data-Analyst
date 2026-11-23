@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup Module</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        #fullDatabaseBackup { background: white; padding: 24px; margin-top: 25px; border-radius: 16px; box-shadow: 0 2px 8px #0000000f; }
+        #fullDatabaseBackup h2 { color: #1a1a2e; font-size: 18px; margin: 0 0 12px; }
+        #fullDatabaseBackup p { color: #64748b; line-height: 1.5; margin: 10px 0; }
+        #fullDatabaseBackup .full-backup-actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+        #fullDatabaseBackup button:disabled { opacity: .6; cursor: not-allowed; }
+        #fullDatabaseBackup dl { display: grid; grid-template-columns: minmax(110px, 140px) minmax(0, 1fr); gap: 10px 16px; margin: 16px 0; }
+        #fullDatabaseBackup dt { color: #64748b; }
+        #fullDatabaseBackup dd { margin: 0; color: #1a1a2e; overflow-wrap: anywhere; }
+        #fullDatabaseBackup .backup-progress { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin: 12px 0; }
+        #fullDatabaseBackup .backup-progress-heading { display: flex; gap: 10px; align-items: center; color: #1a1a2e; }
+        #fullDatabaseBackup .backup-progress-heading strong { flex: 1; min-width: 0; }
+        #fullDatabaseBackup .backup-progress-metrics { color: #64748b; font-size: 13px; margin: 8px 0; }
+        #fullDatabaseBackup .backup-progress-track { position: relative; height: 9px; border-radius: 8px; background: #e2e8f0; overflow: hidden; }
+        #fullDatabaseBackup .backup-progress[aria-busy="true"] .backup-progress-track::after { content: ''; position: absolute; top: 0; bottom: 0; width: 30%; background: linear-gradient(90deg, transparent, #86efac, transparent); animation: full-backup-scan 1.8s linear infinite; }
+        #fullDatabaseBackup .backup-progress-fill { height: 100%; background: #16a34a; width: 0; transition: width .3s; }
+        #fullDatabaseBackup .backup-progress-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0; list-style: none; color: #64748b; font-size: 13px; }
+        #fullDatabaseBackup .backup-progress-steps .active { color: #1a1a2e; font-weight: 600; }
+        #fullDatabaseBackup .backup-progress-steps .done { color: #166534; }
+        #fullDatabaseBackup .backup-progress-log { padding-left: 18px; color: #64748b; font-size: 13px; line-height: 1.6; }
+        #fullDatabaseBackup .backup-spinner { flex-shrink: 0; width: 15px; height: 15px; border: 2px solid #cbd5e1; border-top-color: #16a34a; border-radius: 50%; animation: full-backup-spin .8s linear infinite; }
+        @keyframes full-backup-spin { to { transform: rotate(360deg); } }
+        @keyframes full-backup-scan { from { left: -30%; } to { left: 100%; } }
+        @media (prefers-reduced-motion: reduce) { #fullDatabaseBackup .backup-spinner, #fullDatabaseBackup .backup-progress-track::after { animation: none !important; } }
+        #fullDatabaseBackup [hidden] { display: none !important; }
+        #fullDatabaseBackupStatus[data-kind="error"] { color: #991b1b; }
+        #fullDatabaseBackupStatus[data-kind="success"] { color: #166534; }
+        #configurationBackup { background:white;border-radius:16px;padding:24px;margin-top:25px;box-shadow:0 2px 8px #0000000f; }
+        #configurationBackup p { color:#64748b;line-height:1.5; }
+        #configurationBackup .configuration-actions { display:flex;gap:12px;flex-wrap:wrap;align-items:center; }
+        #configurationBackup button:disabled { opacity:.6;cursor:not-allowed; }
+        #cancelConfigurationRestoreBtn { padding:10px 20px;border:1px solid #cbd5e1;border-radius:6px;background:#f1f5f9;color:#1a1a2e;font-size:14px;cursor:pointer; }
+        #configurationRestorePreview label { display:flex;align-items:center;gap:8px;margin-top:12px; }
+        #configurationBackup [hidden] { display:none!important; }
+        #configurationRestorePreview { background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-top:16px; }
+        #configurationRestoreItems { max-height:260px;overflow:auto;overflow-wrap:anywhere; }
+        #configurationBackupStatus[data-kind="error"] { color:#991b1b; }
+        #configurationBackupStatus[data-kind="success"] { color:#166534; }
+        @media (max-width: 480px) { #fullDatabaseBackup { padding: 18px; } #fullDatabaseBackup dl { grid-template-columns: 1fr; gap: 5px; } #fullDatabaseBackup dd { margin-bottom: 10px; } #fullDatabaseBackup .backup-progress-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    </style>
+</head>
+
+<body data-nav-module="Setup" data-nav-parent="index.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <a href="/static/index.html" class="back-link">← Back to Dashboard</a>
+            <h1>🔧 Setup Module</h1>
+            <p>Configure columns and templates for the system</p>
+        </header>
+
+        <!-- Setup Module Buttons -->
+        <div class="module-grid">
+            <!-- Manage Columns -->
+            <div class="module-card" onclick="window.location.href='/static/columns.html'">
+                <div class="module-icon">📋</div>
+                <h3>Manage Columns</h3>
+                <p>Add, edit, or delete master columns</p>
+                <span class="module-status">Ready</span>
+            </div>
+
+            <!-- Manage Templates -->
+            <div class="module-card" onclick="window.location.href='/static/templates.html'">
+                <div class="module-icon">📄</div>
+                <h3>Manage Templates</h3>
+                <p>Create templates by selecting columns</p>
+                <span class="module-status">Ready</span>
+            </div>
+            <!-- Manage Clients -->
+            <div class="module-card" onclick="window.location.href='/static/clients.html'">
+                <div class="module-icon">🏢</div>
+                <h3>Manage Clients</h3>
+                <p>Add, edit, or delete client entities</p>
+                <span class="module-status">Ready</span>
+            </div>
+            <!-- Error Dashboard -->
+            <div class="module-card" onclick="window.location.href='/static/error_dashboard.html'">
+                <div class="module-icon">📋</div>
+                <h3>Error Dashboard</h3>
+                <p>View, filter, and resolve system errors</p>
+                <span class="module-status">Ready</span>
+            </div>
+            <!-- Settings -->
+            <div class="module-card" onclick="window.location.href='/static/settings.html'">
+                <div class="module-icon">⚙️</div>
+                <h3>App Settings</h3>
+                <p>Configure global application settings</p>
+                <span class="module-status">Ready</span>
+            </div>
+            <!-- Storage Cleanup -->
+            <div class="module-card" id="storageCleanupCard" role="link" tabindex="0">
+                <div class="module-icon">🧹</div>
+                <h3>Storage Cleanup</h3>
+                <p>Review protected and removable database storage</p>
+                <span class="module-status">Admin only</span>
+            </div>
+        </div>
+
+        <!-- Quick Stats -->
+        <section class="quick-stats">
+            <h2>📈 Setup Overview</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Total Columns</span>
+                    <span class="stat-value" id="totalColumns">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Total Templates</span>
+                    <span class="stat-value" id="totalTemplates">0</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Active Templates</span>
+                    <span class="stat-value" id="activeTemplates">0</span>
+                </div>
+            </div>
+        </section>
+        <!-- Separate local administrator action; never calls Setup Data import. -->
+        <section id="fullDatabaseBackup" aria-labelledby="fullDatabaseBackupTitle" hidden>
+            <h2 id="fullDatabaseBackupTitle">Full database backup</h2>
+            <p>Like saving Excel v1 or v2, this creates a separate dated copy of the database data and settings.
+                Your working tables stay in use. Keep original Excel files and app credentials separately.</p>
+            <div class="full-backup-actions">
+                <button id="createFullDatabaseBackupBtn" class="btn-upload" type="button" disabled>Create full backup</button>
+                <button id="checkFullDatabaseBackupBtn" class="btn-upload" type="button" hidden>Check backup status</button>
+            </div>
+            <p id="fullDatabaseBackupStatus" role="status" aria-live="polite">Checking backup availability…</p>
+            <div id="fullDatabaseBackupProgress" class="backup-progress" aria-busy="false" hidden>
+                <div class="backup-progress-heading"><span id="fullDatabaseBackupSpinner" class="backup-spinner" aria-hidden="true" hidden></span><strong id="fullDatabaseBackupStep"></strong></div>
+                <div id="fullDatabaseBackupMetrics" class="backup-progress-metrics"></div>
+                <div id="fullDatabaseBackupBar" class="backup-progress-track" role="progressbar" aria-label="Completed backup stages" aria-valuemin="0" aria-valuemax="4" aria-valuenow="0"><div id="fullDatabaseBackupFill" class="backup-progress-fill"></div></div>
+                <ol class="backup-progress-steps"><li data-backup-step="0">1. Save database</li><li data-backup-step="1">2. Check file</li><li data-backup-step="2">3. Prepare ZIP</li><li data-backup-step="3">4. Verify local ZIP</li></ol>
+                <p id="fullDatabaseBackupActivity"></p>
+                <ul id="fullDatabaseBackupLog" class="backup-progress-log" aria-label="Backup activity"></ul>
+            </div>
+            <dl id="fullDatabaseBackupDetails" hidden>
+                <dt>Backup file</dt><dd id="fullDatabaseBackupFile"></dd>
+                <dt>Local copy</dt><dd id="fullDatabaseBackupPath"></dd>
+                <dt>Local verification</dt><dd id="fullDatabaseBackupLocalStatus"></dd>
+                <dt>Created</dt><dd id="fullDatabaseBackupCreated"></dd>
+                <dt>File checked</dt><dd id="fullDatabaseBackupVerified"></dd>
+            </dl>
+            <p>Restoring a backup is a separate controlled step. This action does not restore or replace working data.</p>
+        </section>
+        <section id="configurationBackup" aria-labelledby="configurationBackupTitle" hidden>
+            <h2 id="configurationBackupTitle" tabindex="-1">Workspace configuration backup</h2>
+            <p>Save this workspace’s settings, holidays, columns, templates, accounting field assignments and saved Excel header mappings.</p>
+            <div class="configuration-actions">
+                <button id="exportConfigurationBtn" class="btn-upload" type="button">Export configuration</button>
+                <button id="selectConfigurationBtn" class="btn-upload" type="button">Choose backup to review</button>
+                <input id="configurationFileInput" type="file" accept=".json,application/json" hidden>
+            </div>
+            <p id="configurationBackupStatus" role="status" aria-live="polite"></p>
+            <div id="configurationRestorePreview" hidden>
+                <h3>Review configuration restore</h3>
+                <p id="configurationRestoreWarning"></p>
+                <ul id="configurationRestoreItems"></ul>
+                <label><input id="confirmConfigurationRestore" type="checkbox"> Restore the listed configuration in this workspace</label>
+                <div class="configuration-actions" style="margin-top:12px;">
+                    <button id="restoreConfigurationBtn" class="btn-upload" type="button" disabled>Restore configuration</button>
+                    <button id="cancelConfigurationRestoreBtn" type="button">Cancel review</button>
+                </div>
+            </div>
+        </section>
+        <!-- Existing Setup Data export/import remains a separate operation. -->
+        <section
+            id="legacySetupTransfer"
+            style="background:white; border-radius:16px; padding:20px 25px; box-shadow:0 2px 8px rgba(0,0,0,0.06); margin-top:25px;">
+            <h2 style="font-size:18px; color:#1a1a2e; margin-bottom:10px;">💾 Legacy setup data transfer</h2>
+            <p style="color:#64748b; font-size:14px; margin-bottom:15px;">Export selected setup and client-data tables as JSON.
+                This is not a full database backup. Import replaces existing setup, client and transaction data; use only for a separately approved transfer.</p>
+            <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                <button id="exportBackupBtn" class="btn-upload" style="background:#3b82f6; padding:10px 25px;">📤 Export
+                    Setup Data</button>
+                <button id="importBackupBtn" class="btn-upload" style="background:#f59e0b; padding:10px 25px;">📥 Import
+                    Setup Data</button>
+                <input type="file" id="importFileInput" accept=".json" style="display:none;">
+                <span id="backupStatus" style="font-size:14px; color:#64748b; align-self:center; display:none;"></span>
+            </div>
+        </section>
+    </div>
+
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/loading_ui.js?v=1"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/setup.js?v=8"></script>
+</body>
+
+</html>

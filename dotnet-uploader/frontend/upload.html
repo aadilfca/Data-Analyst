@@ -1,0 +1,1811 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Client Data</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <!-- Keep Excel parsing available when the browser blocks external CDN requests. -->
+    <script src="/static/xlsx.full.min.js"></script>
+    <style>
+        /* ---------- RESET ---------- */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5;
+            color: #1a1a2e;
+            padding: 0;
+        }
+
+        /* Flush layout: no outer gutter, same treatment as verification.html's
+           .main-container.verification-active. Internal panels (top-bar, main-grid,
+           status-bar, footer-meta) carry their own margins, so removing this
+           outer padding doesn't affect their spacing. */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            padding: 0;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+            position: relative;
+            min-height: 500px;
+            transition: height 0.3s ease;
+        }
+
+        /* When preview is active, give the container a fixed height */
+        .container.preview-active {
+            height: calc(100vh - 140px);
+            overflow: hidden;
+        }
+
+        /* ---------- STEP INDICATOR STRIP (Phase 1 of the Upload header reorg) ----------
+           Visual-only strip above the top-bar: "1 Template · 2 Upload sheet · 3 Map columns ·
+           4 Review and import". No activation/advancement logic yet (Phases 2-4) -- step 1 is
+           marked .active as a static placeholder. Same zero-top-margin convention as .top-bar/
+           .client-warning below (margin-collapse: this can be the first visible child). */
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 0 28px 16px 28px;
+            padding: 12px 20px;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .step-circle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            border: 1px solid #cbd5e1;
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            background: white;
+            flex-shrink: 0;
+        }
+
+        .step-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #94a3b8;
+            white-space: nowrap;
+        }
+
+        .step-item.active .step-circle {
+            background: #3b82f6;
+            border-color: #3b82f6;
+            color: white;
+        }
+
+        .step-item.active .step-label {
+            color: #1a1a2e;
+        }
+
+        .step-connector {
+            flex: 1 1 40px;
+            max-width: 80px;
+            height: 1px;
+            background: #e2e8f0;
+        }
+
+        /* Template-first toolbar: compact controls share one desktop row. */
+        .top-bar {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            margin: 0 28px 16px;
+            padding: 12px 14px;
+        }
+        .top-bar-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+        .top-bar .btn-upload-file, .btn-databank {
+            height: 32px;
+            padding: 0 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            background: #3b82f6;
+            color: white;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .top-bar .btn-upload-file:hover, .btn-databank:hover:not(:disabled) { background: #2563eb; }
+        .btn-databank {
+            margin-left: auto;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-databank:disabled { background: #94a3b8; opacity: 0.6; cursor: not-allowed; }
+        .upload-file-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            max-width: 330px;
+        }
+        .upload-file-group.has-file { flex: 1 1 200px; min-width: 180px; }
+        .top-bar .file-detail {
+            flex: 1 1 160px;
+            min-width: 80px;
+            height: 32px;
+            box-sizing: border-box;
+            padding: 4px 6px;
+            gap: 5px;
+        }
+        .top-bar .file-detail .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .top-bar .file-detail .size, .top-bar .file-detail .clear { flex-shrink: 0; }
+        .btn-download-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            padding: 0;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            background: white;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .btn-download-icon:hover:not(:disabled) { background: #eff6ff; border-color: #3b82f6; }
+        .btn-download-icon:disabled { opacity: 0.5; cursor: not-allowed; }
+        .top-bar #templateDropdown { width: 145px; min-width: 0; }
+        .top-bar #sheetSelector { width: 125px; min-width: 0; }
+        .top-bar #templateDropdown, .top-bar #sheetSelector,
+        .top-bar .date-format-trigger, .top-bar .preview-btn { height: 32px; box-sizing: border-box; }
+        .top-bar #templateField, .top-bar #sheetDownloadGroup, .top-bar #sheetField,
+        .top-bar #dateFormatGroup, .top-bar .preview-btn { flex-shrink: 0; }
+        @media (min-width: 1200px) { .top-bar-row { flex-wrap: nowrap; } }
+
+        /* ---------- SAVE MAPPING BUTTON (Phase A2 of the Save Column Mapping feature) ----------
+           Small icon+text button, same visual language as .btn-download-icon -- sits in the
+           mapping panel's own section-title row (next to the match count), not the action-bar
+           below (that bar is for the Upload/Reset import actions, this is a mapping-table-scoped
+           action). Always upserts (overwrites) on click -- no separate edit/delete UI this phase
+           (Phase A3). */
+        .btn-save-mapping {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            background: white;
+            color: #1a1a2e;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .btn-save-mapping:hover:not(:disabled) {
+            background: #eff6ff;
+            border-color: #3b82f6;
+        }
+
+        .btn-save-mapping:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ---------- CLEAR SAVED MAPPING BUTTON (Phase A3, final phase) ----------
+           Same small icon-button sizing as .btn-save-mapping, sitting right next to it -- a red
+           hover treatment (matching this app's existing destructive-action color, .file-detail
+           .clear) signals it removes the persisted saved mapping, not the on-screen table. */
+        .btn-clear-mapping {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            background: white;
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s, border-color 0.2s, color 0.2s;
+        }
+
+        .btn-clear-mapping:hover:not(:disabled) {
+            background: #fef2f2;
+            border-color: #dc2626;
+            color: #dc2626;
+        }
+
+        .btn-clear-mapping:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Template download appears beside the selected template. */
+        .field-group {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .top-bar .field {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .top-bar label {
+            font-weight: 600;
+            font-size: 12px;
+            color: #1e293b;
+            white-space: nowrap;
+        }
+
+        .top-bar select {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            min-width: 140px;
+            background: white;
+        }
+
+        /* ---------- DATE FORMAT PREVIEW (Phase 5): small text lines, not a table -- a sanity check ---------- */
+        #dateFormatPreview {
+            flex-direction: column;
+            align-items: flex-start !important;
+            gap: 2px;
+        }
+
+        #dateFormatPreview .date-preview-line {
+            font-size: 11px;
+            color: #64748b;
+            white-space: nowrap;
+        }
+
+        #dateFormatPreview .date-preview-line.error {
+            color: #dc2626;
+        }
+
+        /* ---------- DATE FORMAT TRIGGER + POPOVER (Phase 3 of the Upload header reorg) ----------
+           Collapses Date Delimiter + Date Order (previously two always-visible dropdowns) into
+           one trigger button; the popover holds the actual <select> elements (not JS-rebuilt
+           content) so their existing change listeners keep working untouched. #dateFormatGroup
+           is hidden until mapping is known (same reveal timing as the mini preview/row exclusion
+           grid); #dateFormatPreview lives inside the popover so it's only ever visible while the
+           popover itself is open. */
+        #dateFormatGroup {
+            position: relative;
+        }
+
+        .date-format-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #1a1a2e;
+            background: white;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: border-color 0.2s;
+        }
+
+        .date-format-trigger:hover {
+            border-color: #3b82f6;
+        }
+
+        /* Same shadow/radius/border language as .voucher-change-popover (verification.js) for
+           visual consistency with the app's existing popover pattern. */
+        /* display:flex describes the "open" layout JS switches to (open/closeDateFormatPopover()
+           in upload.js); the closed default comes from the inline style="display:none" already
+           on the element in the markup below, same convention as #dateFormatPreview. */
+        .date-format-popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            z-index: 50;
+            background: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 220px;
+        }
+
+        /* ---------- PREVIEW BUTTON ---------- */
+        .preview-btn {
+            padding: 4px 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: background 0.2s;
+            display: none;
+        }
+
+        .preview-btn:hover {
+            background: #2563eb;
+        }
+
+        .preview-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ---------- MAIN GRID ---------- */
+        .main-grid {
+            display: flex;
+            gap: 20px;
+            padding: 0 28px;
+        }
+
+        .left-panel {
+            flex: 0 0 38%;
+            min-width: 320px;
+            background: #fafcff;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .right-panel {
+            flex: 1 1 62%;
+            min-width: 350px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .right-panel .upload-area {
+            flex-shrink: 0;
+        }
+
+        /* ---------- SECTION TITLES ---------- */
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #1a1a2e;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .section-title .count {
+            font-weight: 400;
+            font-size: 12px;
+            color: #64748b;
+            margin-left: auto;
+        }
+
+        /* ---------- RESTORE PREVIEW (session-restore, grayed-out locked mapping preview) ----------
+           Shown by renderRestorePreview() (upload.js) between a silent session restore and the
+           user re-selecting their file -- a non-interactive read-only echo of the previous
+           mapping table + a one-line sheet/row-exclusion summary, so returning to the page
+           doesn't look like everything was lost. Dimming is scoped to #mappingPanel only (not
+           the whole #leftPanel) so the banner itself stays at full opacity/legibility as the
+           active "you need to act" element. Cleared by clearRestorePreview() the moment
+           autoMapColumns() succeeds with the real (re-uploaded) file's data. */
+        #leftPanel.restore-preview-locked #mappingPanel {
+            opacity: 0.55;
+            pointer-events: none;
+        }
+
+        .restore-preview-banner {
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            color: #92400e;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 12px;
+        }
+
+        /* ---------- MAPPING TABLE ---------- */
+        .mapping-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .mapping-table th {
+            background: #f8fafc;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 2px solid #e2e8f0;
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        .mapping-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f0f2f5;
+            vertical-align: middle;
+            font-size: 13px;
+        }
+
+        .mapping-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .mapping-table tr:hover td {
+            background: #fafcff;
+        }
+
+        .mapping-table tr:nth-child(even) td {
+            background: #fafcff;
+        }
+
+        .mapping-table tr:nth-child(even):hover td {
+            background: #f0f4ff;
+        }
+
+        .mapping-table select {
+            padding: 4px 8px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+            min-width: 100px;
+            max-width: 160px;
+            background: white;
+        }
+
+        .mapping-table select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+        }
+
+        .mapping-table input[data-compare-column] {
+            width: 15px;
+            height: 15px;
+            accent-color: #2563eb;
+            cursor: pointer;
+        }
+
+        .mapping-table input[data-compare-column]:disabled {
+            cursor: not-allowed;
+            opacity: .45;
+        }
+
+        .type-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #f1f5f9;
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        .type-badge.numeric {
+            background: #fef9e7;
+            color: #92400e;
+        }
+
+        .type-badge.date {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        /* ---------- RATE MODE BADGE (Phase D of the Rate-derivation requirement) ----------
+           Informational-only indicator of the resolved Auto->Imported/Derived or Forced
+           Imported/Derived decision (routers/import_export.py's validate_only() response
+           rate_mode field) -- shown in the Row Selection grid header and Excel Preview
+           header once Validate succeeds (renderRateModeIndicator() in upload.js). Absent
+           entirely for a template with no rate_source (rate_mode: null). Same small-pill
+           sizing language as .type-badge above. */
+        .rate-mode-badge {
+            display: none;
+            align-items: center;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            background: #eff6ff;
+            color: #1e40af;
+            white-space: nowrap;
+        }
+
+        .mapping-count {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #64748b;
+        }
+        #sourceControlPanel { margin-top: 12px; padding: 10px 12px; border: 1px solid #dbe2ea; border-radius: 6px; font-size: 12px; color: #475569; }
+        #sourceControlPanel[hidden] { display: none; }
+        #sourceControlPanel .source-control-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+        #sourceControlPanel input[type="number"] { width: 78px; padding: 4px 6px; border: 1px solid #cbd5e1; border-radius: 4px; }
+        #sourceControlPanel p { margin: 6px 0 0; overflow-wrap: anywhere; }
+        #sourceControlPanel .source-control-table { overflow-x: auto; margin-top: 6px; }
+        #sourceControlPanel table { width: 100%; border-collapse: collapse; }
+        #sourceControlPanel th, #sourceControlPanel td { padding: 4px 6px; border-bottom: 1px solid #e2e8f0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #sourceControlPanel th:first-child, #sourceControlPanel td:first-child { text-align: left; }
+        #sourceControlPanel [data-status="mismatch"] { color: #b42318; }
+        #sourceControlPanel [data-status="matched"] { color: #16803c; }
+        #rowExclusionContainer tr.source-control-row td { background: #eef2f6; color: #475569; }
+        #importSummaryOverlay .result-reconciliation { margin-top: 16px; padding: 12px; border: 1px solid #dbe2ea; border-radius: 6px; color: #475569; font-size: 12px; }
+        #importSummaryOverlay .result-reconciliation p { margin: 5px 0; overflow-wrap: anywhere; }
+        #importSummaryOverlay .reconciliation-table-scroll { overflow-x: auto; }
+        #importSummaryOverlay .result-reconciliation table { width: 100%; min-width: 280px; border-collapse: collapse; margin: 8px 0; }
+        #importSummaryOverlay .result-reconciliation th, #importSummaryOverlay .result-reconciliation td { width: 32%; padding: 6px 4px; text-align: right; border-bottom: 1px solid #e2e8f0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        #importSummaryOverlay .result-reconciliation th:first-child, #importSummaryOverlay .result-reconciliation td:first-child { width: 36%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+        #importSummaryOverlay .result-reconciliation tr[data-matches="false"] { color: #b42318; background: #fff5f5; }
+        #importSummaryOverlay .result-reconciliation [data-status="matched"] { color: #16803c; }
+        #importSummaryOverlay .result-reconciliation [data-status="mismatch"], #importSummaryOverlay .result-reconciliation [data-status="incomplete"] { color: #b42318; }
+        #importSummaryOverlay .result-reconciliation [data-status="unavailable"] { color: #92400e; }
+        #importSummaryOverlay .result-source-notes { margin-top: 12px; padding: 10px 12px; border: 1px solid #dbe2ea; border-radius: 6px; color: #475569; font-size: 12px; }
+        #importSummaryOverlay .result-source-notes p { margin: 5px 0; overflow-wrap: anywhere; }
+        #importSummaryOverlay .result-source-notes ul { margin: 6px 0 0; padding-left: 20px; }
+        #importSummaryOverlay .result-source-notes li { margin: 3px 0; overflow-wrap: anywhere; }
+        .mapping-status { color: #16803c; font-size: 12px; font-weight: 600; white-space: nowrap; }
+        .mapping-status.is-unmapped { color: #b42318; }
+
+        /* ---------- ACTION BAR (consolidated overwrite note + Upload/Reset;
+           replaces the old two-row .mode-actions .mode-row / .btn-row stack) ---------- */
+        .action-bar {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px 16px;
+        }
+
+        .action-bar .action-note {
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        .action-bar .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        /* Ledger identity is one ordinary field, immediately above Validate. */
+        #ledgerUploadContext {
+            flex-basis: 100%;
+            min-width: 0;
+            margin: 10px 0;
+            font-size: 12px;
+            color: #475569;
+        }
+
+        #ledgerUploadContext label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        #ledgerAccountSelect {
+            width: 100%;
+            min-width: 0;
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 5px;
+            background: white;
+            color: #334155;
+        }
+
+        .ledger-account-control { position: relative; display: flex; min-width: 0; }
+        #ledgerAccountSelect { border-radius: 5px 0 0 5px; }
+        #ledgerAccountToggle { flex: 0 0 36px; border: 1px solid #cbd5e1; border-left: 0; border-radius: 0 5px 5px 0; background: #f8fafc; color: #475569; cursor: pointer; }
+        #ledgerAccountToggle:disabled { cursor: default; opacity: .55; }
+        #ledgerAccountSelect:focus-visible, #ledgerAccountToggle:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+        #ledgerAccountOptions[hidden] { display: none; }
+        #ledgerAccountOptions { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 30; max-height: 240px; overflow-y: auto; padding: 4px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 8px 22px #0f172a24; }
+        #ledgerAccountOptions [role="option"] { display: block; width: 100%; padding: 9px 8px; border: 0; border-radius: 4px; background: white; text-align: left; font-size: 13px; color: #1e293b; cursor: pointer; overflow-wrap: anywhere; }
+        #ledgerAccountOptions [role="option"]:hover, #ledgerAccountOptions [role="option"].active { background: #eaf2ff; }
+        #ledgerAccountOptions .ledger-option-message { padding: 9px 8px; color: #64748b; font-size: 12px; }
+
+        #ledgerAccountHelp, #uploadCoverageHelp { margin: 6px 0 0; }
+        #uploadCoverageHelp { flex-basis: 100%; }
+        .upload-field-error { border-color: #dc2626 !important; box-shadow: 0 0 0 2px #fee2e2; }
+        .upload-inline-error { color: #b42318; font-size: 12px; }
+
+        #ledgerEvidenceSummary {
+            margin: 0 28px 12px;
+            font-size: 13px;
+            color: #475569;
+        }
+
+        .action-bar .action-buttons button {
+            padding: 7px 18px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background .2s;
+        }
+
+        .action-bar .action-buttons button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #22c55e;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #16a34a;
+        }
+
+        .btn-secondary {
+            background: #8b5cf6;
+            color: white;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #7c3aed;
+        }
+
+        .btn-neutral {
+            background: #e2e8f0;
+            color: #1a1a2e;
+        }
+
+        .btn-neutral:hover:not(:disabled) {
+            background: #cbd5e1;
+        }
+
+        #uploadReplacementReview::backdrop {
+            background: rgba(15, 23, 42, 0.35);
+        }
+
+        #uploadReplacementReview button {
+            padding: 9px 16px;
+            border: none;
+            border-radius: 6px;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #uploadReplacementReview button:focus-visible {
+            outline: 2px solid #2563eb;
+            outline-offset: 3px;
+        }
+
+        /* ---------- UPLOAD AREA (restyled for consistency with the Phase 2 action bar/mapping table) ---------- */
+        .upload-area {
+            border: 2px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 18px 22px;
+            cursor: pointer;
+            transition: border .3s, background .3s, box-shadow .3s;
+            background: #fafcff;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .upload-area:hover {
+            border-color: #3b82f6;
+            background: #f8faff;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.08);
+        }
+
+        .upload-area.dragover {
+            border-color: #3b82f6;
+            background: #eff6ff;
+        }
+
+        .upload-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .upload-left .icon {
+            font-size: 28px;
+        }
+
+        .upload-left .info h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+
+        .upload-left .info p {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-top: 2px;
+        }
+
+        /* CSS animations (unlike transitions) auto-play whenever an element goes from
+           display:none to visible, so this fades the chip in the moment handleFile() reveals it
+           -- no JS change needed. */
+        @keyframes fadeInFileDetail {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .file-detail {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            padding: 4px 12px;
+            border-radius: 6px;
+            animation: fadeInFileDetail 0.3s ease;
+        }
+
+        .file-detail .name {
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .file-detail .size {
+            color: #94a3b8;
+            font-size: 11px;
+        }
+
+        .file-detail .clear {
+            background: none;
+            border: none;
+            color: #dc2626;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+
+        .file-detail .clear:hover {
+            color: #b91c1c;
+        }
+
+        /* ---------- CLIENT SELECTION WARNING ---------- */
+        .client-warning {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 8px;
+            padding: 10px 16px;
+            /* No top margin: same margin-collapse reasoning as .top-bar above —
+               this can be the first visible child when no client is selected. */
+            margin: 0 28px 16px 28px;
+            color: #92400e;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .client-warning .icon {
+            font-size: 20px;
+        }
+
+        .client-warning strong {
+            color: #78350f;
+        }
+
+        /* ---------- STATUS BAR ---------- */
+        .status-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 20px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            align-items: center;
+            border: 1px solid #e2e8f0;
+            margin: 16px 28px 0 28px;
+        }
+
+        .status-bar.success {
+            background: #dcfce7;
+            border-color: #bbf7d0;
+            color: #166534;
+        }
+
+        .status-bar.info {
+            background: #eff6ff;
+            border-color: #bfdbfe;
+            color: #1e40af;
+        }
+
+        .status-bar.error {
+            background: #fee2e2;
+            border-color: #fecaca;
+            color: #991b1b;
+        }
+
+        .status-bar.loading {
+            background: #fef3c7;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+
+        .status-bar .spacer {
+            margin-left: auto;
+        }
+
+        /* ---------- FOOTER ---------- */
+        .footer-meta {
+            margin-top: 10px;
+            font-size: 11px;
+            color: #94a3b8;
+            display: flex;
+            justify-content: flex-end;
+            gap: 20px;
+            flex-wrap: wrap;
+            padding: 0 28px;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin .6s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+
+        /* ---------- IMPORT PROGRESS BAR (Import Progress requirement, frontend phase) ----------
+           Lives inside #statusBar, under the "Importing data" message -- flex-basis:100% forces it
+           onto its own row below #statusMessage/#statusExtra since .status-bar is flex-wrap:wrap.
+           Amber fill matches .status-bar.loading's own palette (background #fef3c7 / color #92400e). */
+        .import-progress-bar {
+            flex-basis: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .import-progress-track {
+            flex: 1 1 auto;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .import-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: #f59e0b;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .import-progress-label {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* ---------- PREVIEW SHEET (Overlay) ---------- */
+        .preview-sheet {
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            border-radius: 12px;
+            z-index: 10;
+            padding: 20px 28px;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .preview-sheet.active {
+            display: flex;
+        }
+
+        .preview-sheet .preview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e2e8f0;
+            flex-wrap: wrap;
+            gap: 10px;
+            flex-shrink: 0;
+            /* prevent header from shrinking */
+        }
+
+        .preview-sheet .preview-header h2 {
+            font-size: 20px;
+            color: #1a1a2e;
+            margin: 0;
+        }
+
+        .preview-sheet .preview-header .back-link {
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .preview-sheet .preview-header .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .preview-sheet .preview-header .preview-info {
+            font-size: 13px;
+            color: #64748b;
+        }
+
+        /* Table wrapper takes remaining space */
+        .preview-sheet .preview-table-wrapper {
+            flex: 1;
+            overflow: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            margin: 12px 0;
+            /* small margin above footer */
+            min-height: 0;
+            /* flex fix */
+        }
+
+        .preview-sheet .preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            font-family: 'Segoe UI', 'Calibri', sans-serif;
+        }
+
+        .preview-sheet .preview-table th {
+            background: #f8fafc;
+            padding: 10px 16px;
+            text-align: left;
+            font-weight: 600;
+            border: 1px solid #e2e8f0;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #1e293b;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        .preview-sheet .preview-table td {
+            padding: 10px 16px;
+            border: 1px solid #e2e8f0;
+            font-size: 13px;
+            white-space: nowrap;
+            background: white;
+            min-width: 120px;
+        }
+
+        .preview-sheet .preview-table tr:nth-child(even) td {
+            background: #fafcff;
+        }
+
+        .preview-sheet .preview-table tr:hover td {
+            background: #f1f5f9;
+        }
+
+        /* Footer – fixed at bottom */
+        .preview-sheet .preview-footer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px 30px;
+            padding: 10px 0 0 0;
+            border-top: 2px solid #e2e8f0;
+            flex-shrink: 0;
+            font-size: 13px;
+            color: #64748b;
+            justify-content: flex-start;
+            align-items: center;
+        }
+
+        .preview-sheet .preview-footer span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .preview-sheet .preview-footer #footerClient {
+            font-weight: 500;
+            color: #1a1a2e;
+        }
+
+        /* ---------- RESPONSIVE ---------- */
+        @media (max-width: 900px) {
+            .main-grid {
+                flex-direction: column;
+            }
+
+            .left-panel,
+            .right-panel {
+                flex: 1 1 auto;
+            }
+
+            .step-indicator {
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            .step-connector {
+                flex: 1 1 20px;
+            }
+
+            .top-bar { margin-left: 12px; margin-right: 12px; padding: 10px; }
+            .top-bar-row { align-items: center; }
+            .top-bar #templateField { flex-basis: 100%; }
+            .top-bar #templateDropdown { flex: 1; width: auto; }
+            .upload-file-group.has-file { max-width: 100%; }
+            .top-bar #dateFormatGroup { flex-basis: 100%; }
+
+            .action-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .status-bar {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+
+            .status-bar .spacer {
+                margin-left: 0;
+            }
+
+            .footer-meta {
+                flex-direction: column;
+                align-items: center;
+                text-align: center;
+            }
+
+            .preview-sheet {
+                padding: 15px;
+            }
+        }
+
+        /* ---------- ROW SELECTION GRID (Phase 2 of the row-exclusion requirement) ----------
+           Checkbox-per-row, paginated grid so the user can exclude rows (subtotals, stray
+           text rows, etc.) before validate/import. Box/header/table visuals mirror what the
+           now-removed Mini Preview container used for consistency; footer pagination reuses the
+           global .preview-pagination / .btn-pagination classes from style.css (already
+           used by the full-page Preview overlay below), with new locally-scoped IDs since
+           #previewRowRange / #previewPageInfo are already taken by that overlay. */
+        #rowExclusionContainer {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 0;
+            background: white;
+            margin-top: 16px;
+            overflow: hidden;
+            display: none;
+            /* shown by JS once column mapping is complete */
+        }
+
+        #rowExclusionContainer .row-exclusion-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: #f8fafc;
+            border-bottom: 2px solid #e2e8f0;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        /* Scoped to the title only (was a bare "span" selector, which would otherwise
+           also style the Phase 3 counter/Select All/Deselect All controls below). */
+        #rowExclusionContainer .row-exclusion-header .row-exclusion-title {
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #1a1a2e;
+        }
+
+        /* ---------- Phase 3: live counter + Select All/Deselect All ---------- */
+        #rowExclusionContainer .row-exclusion-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #rowExclusionContainer .row-exclusion-counter {
+            font-size: 11px;
+            font-weight: 500;
+            color: #64748b;
+            white-space: nowrap;
+        }
+
+        /* Mother checkbox in the header row (replaces the old separate Select All /
+           Deselect All buttons) -- sized to stand out slightly in its narrow column. */
+        #rowExclusionContainer .row-exclusion-check-col input[type="checkbox"] {
+            width: 15px;
+            height: 15px;
+            cursor: pointer;
+        }
+
+        #rowExclusionContainer table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            border: none;
+        }
+
+        #rowExclusionContainer table thead {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+
+        #rowExclusionContainer table th {
+            background: #f8fafc;
+            padding: 8px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 2px solid #e2e8f0;
+            color: #475569;
+            white-space: nowrap;
+        }
+
+        #rowExclusionContainer table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #f0f2f5;
+            vertical-align: middle;
+            font-size: 13px;
+            background: white;
+            white-space: nowrap;
+        }
+
+        #rowExclusionContainer table tr:last-child td {
+            border-bottom: none;
+        }
+
+        #rowExclusionContainer table tr:hover td {
+            background: #fafcff;
+        }
+
+        #rowExclusionContainer table tr:nth-child(even) td {
+            background: #fafcff;
+        }
+
+        #rowExclusionContainer table tr:nth-child(even):hover td {
+            background: #f0f4ff;
+        }
+
+        /* Checkbox and row-number columns stay narrow and centered */
+        #rowExclusionContainer .row-exclusion-check-col,
+        #rowExclusionContainer .row-exclusion-rownum-col {
+            width: 40px;
+            text-align: center;
+        }
+
+        /* Row is dimmed + struck through while its checkbox is unchecked (excluded) --
+           strikethrough plus a dimmed background (not colour alone), matching how
+           excluded/archived items read in familiar apps (Gmail, banking transaction
+           lists), so it's unambiguous which rows won't reach the database. */
+        #rowExclusionContainer tr.row-excluded td {
+            opacity: 0.45;
+            text-decoration: line-through;
+        }
+
+        /* Phase 3: soft auto-flag heuristic hint (blank/"total"/"subtotal" key column) --
+           advisory only, coexists with .row-excluded (opacity) since they touch different
+           properties -- a flagged row that's also unchecked shows both. */
+        #rowExclusionContainer tr.row-flagged td {
+            background: #fffbeb;
+        }
+
+        #rowExclusionContainer tr.row-flagged:hover td {
+            background: #fef3c7;
+        }
+
+        /* Phase 4: validation-failed overlay -- a red edge stripe on the checkbox cell,
+           independent of .row-flagged (background tint) and .row-excluded (opacity), so
+           it stays visibly distinct however it combines with those two states. */
+        #rowExclusionContainer tr.row-validation-failed td.row-exclusion-check-col {
+            border-left: 3px solid #dc2626;
+        }
+
+        #rowExclusionContainer .row-exclusion-footer {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 8px 14px;
+            border-top: 2px solid #e2e8f0;
+            background: #f8fafc;
+            flex-wrap: wrap;
+        }
+
+        #rowExclusionContainer .row-exclusion-range,
+        #rowExclusionContainer .row-exclusion-page-info {
+            font-size: 12px;
+            color: #64748b;
+            white-space: nowrap;
+        }
+
+        /* ---------- EXCEPTIONS LIST (Phase 3 of the row-level blank-field-rejection requirement) ----------
+           Rows rejected by the backend (routers/import_export.py's rejected_rows -- blank Document
+           ID/Amount/Date) get their own distinct panel here, separate from #rowExclusionContainer's
+           checkbox grid -- deliberately NOT reusing .row-flagged/.row-validation-failed/.row-excluded,
+           since a rejected-for-blank-critical-field row is its own category (dropped from import
+           entirely unless overridden), not a variant of the grid's advisory/error states. Hidden by
+           default; shown/hidden by renderRejectedRowsList() in upload.js. */
+        .row-rejection-container {
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            background: #fff5f5;
+            margin-top: 16px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .row-rejection-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 14px;
+            background: #fee2e2;
+            border-bottom: 2px solid #fecaca;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .row-rejection-header .row-rejection-title {
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #991b1b;
+        }
+
+        .row-rejection-header .row-rejection-count {
+            font-size: 11px;
+            font-weight: 500;
+            color: #b91c1c;
+            white-space: nowrap;
+        }
+
+        .row-rejection-list {
+            max-height: 260px;
+            overflow-y: auto;
+        }
+
+        .row-rejection-item {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+            padding: 10px 14px;
+            border-bottom: 1px solid #fecaca;
+            font-size: 13px;
+        }
+
+        .row-rejection-item:last-child {
+            border-bottom: none;
+        }
+
+        .row-rejection-rownum {
+            font-weight: 600;
+            color: #991b1b;
+            white-space: nowrap;
+        }
+
+        .row-rejection-reason {
+            color: #7f1d1d;
+            flex: 1 1 auto;
+            min-width: 160px;
+        }
+
+        .row-rejection-override-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #475569;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .row-rejection-override-label input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+        }
+    /* Upload-stage issues share one bounded, keyboard-accessible dialog. */
+#validationErrorOverlay { position:fixed; inset:0; z-index:3100; background:rgba(15,23,42,.5); display:flex; align-items:center; justify-content:center; padding:16px; }
+#validationErrorOverlay section { background:white; border:1px solid #dce3ed; border-radius:14px; padding:0; width:min(700px,100%); max-height:85vh; overflow:auto; box-shadow:0 20px 60px #0004; color:#1a1a2e; }
+#validationErrorOverlay section[data-severity="warning"], #validationErrorOverlay section[data-severity="unconfirmed"] { border-color:#b45309; }
+#validationErrorOverlay section[data-severity="info"] { border-color:#0f766e; }
+#validationErrorOverlay h2 { margin:0 0 6px; font-size:20px; }
+#validationErrorOverlay p { overflow-wrap:anywhere; margin:0; }
+#validationErrorOverlay .upload-issue-header { padding:22px 24px 18px; border-bottom:1px solid #e9edf3; }
+#validationErrorOverlay .upload-issue-stage { color:#64748b; font-size:13px; }
+#validationErrorOverlay .upload-issue-summary { margin:18px 24px 6px; font-weight:600; }
+#validationErrorOverlay .upload-issue-action { margin:0 24px 18px; color:#64748b; font-size:13px; }
+#validationErrorOverlay .upload-issue-details { overflow:auto; max-height:40vh; margin:16px 24px 0; }
+#validationErrorOverlay table { width:100%; border-collapse:collapse; font-size:13px; }
+#validationErrorOverlay th, #validationErrorOverlay td { padding:8px; text-align:left; border-bottom:1px solid #e2e8f0; vertical-align:top; overflow-wrap:anywhere; }
+#validationErrorOverlay th { position:sticky; top:0; background:#f5f7fa; color:#64748b; font-size:12px; font-weight:500; }
+#validationErrorOverlay .upload-issue-navigation { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin:12px 24px 18px; font-size:12px; color:#64748b; }
+#validationErrorOverlay .upload-issue-item + .upload-issue-item { margin-top:8px; }
+#validationErrorOverlay .upload-issue-field { color:#bd252c; font-weight:600; display:block; }
+#validationErrorOverlay .upload-issue-label { font-weight:600; display:block; }
+#validationErrorOverlay .upload-issue-fix { display:block; color:#64748b; font-size:12px; margin-top:3px; }
+#validationErrorOverlay td:nth-child(2) { white-space:nowrap; }
+#validationErrorOverlay button { padding:8px 16px; border:1px solid #cbd5e1; border-radius:6px; background:#f8fafc; cursor:pointer; }
+#validationErrorOverlay button:disabled { opacity:.5; cursor:default; }
+#validationErrorOverlay .upload-issue-row-link { padding:0; border:0; background:transparent; color:#2563eb; text-decoration:underline; }
+#validationErrorOverlay .upload-issue-footer { display:flex; justify-content:flex-end; margin-top:18px; padding:15px 24px; border-top:1px solid #e9edf3; background:#f8fafc; }
+#validationErrorOverlay #validationErrorCloseBtn { background:#28446b; color:white; border-color:#28446b; }
+/* Replacement confirmation uses the same compact, scoped dialog treatment. */
+#uploadReplacementReview { margin:auto; padding:0; border:1px solid #dce3ed; border-radius:14px; width:min(700px,calc(100% - 32px)); max-height:85vh; color:#1a1a2e; box-shadow:0 20px 60px #0004; overflow:auto; }
+#uploadReplacementReview::backdrop { background:rgba(15,23,42,.5); }
+#uploadReplacementReview header { padding:22px 24px 18px; border-bottom:1px solid #e9edf3; }
+#uploadReplacementReview h2 { font-size:20px; margin:0 0 6px; }
+#uploadReplacementReview header p { margin:0; font-size:13px; color:#64748b; overflow-wrap:anywhere; }
+#uploadReplacementReview .upload-review-content { padding:18px 24px; }
+#uploadReplacementReview table { border-collapse:collapse; width:100%; font-size:14px; }
+#uploadReplacementReview th, #uploadReplacementReview td { padding:10px; border-bottom:1px solid #edf0f5; text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+#uploadReplacementReview th { padding:8px 10px; background:#f5f7fa; color:#64748b; font-size:12px; font-weight:500; }
+#uploadReplacementReview tbody tr:last-child td { border-bottom:0; }
+#uploadReplacementReview .upload-review-count { text-align:right; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
+#uploadReplacementReview #uploadReplacementVouchers { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin:16px 0; padding-top:14px; border-top:1px solid #e9edf3; font-size:13px; }
+#uploadReplacementReview #uploadReplacementVouchers[hidden], #uploadReplacementReview #uploadReplacementDateMoves[hidden] { display:none; }
+#uploadReplacementReview .upload-review-notes td { padding:7px 0; font-size:12px; }
+#uploadReplacementReview .upload-review-notes td:first-child { width:95px; color:#64748b; padding-right:12px; }
+#uploadReplacementReview #uploadReplacementDateMoves { margin-top:16px; max-height:160px; overflow:auto; }
+#uploadReplacementReview #uploadReplacementDateMoves h3 { font-size:13px; margin:0 0 8px; }
+#uploadReplacementReview #uploadReplacementDateMoves table { font-size:12px; }
+#uploadReplacementReview footer { display:flex; justify-content:flex-end; gap:10px; padding:15px 24px; border-top:1px solid #e9edf3; background:#f8fafc; }
+#uploadReplacementReview footer button { padding:9px 16px; border-radius:7px; border:1px solid #d4dce8; background:white; color:#243047; cursor:pointer; font:inherit; font-size:13px; }
+#uploadReplacementReview #uploadReplacementConfirm { background:#28446b; color:white; border-color:#28446b; }
+@media (max-width:440px) {
+    #validationErrorOverlay .upload-issue-header, #uploadReplacementReview header { padding:16px; }
+    #validationErrorOverlay .upload-issue-summary { margin:16px 16px 6px; }
+    #validationErrorOverlay .upload-issue-action { margin:0 16px 16px; }
+    #validationErrorOverlay .upload-issue-details { margin:16px 16px 0; }
+    #validationErrorOverlay .upload-issue-navigation { margin:12px 16px 16px; }
+    #validationErrorOverlay td:nth-child(2) { white-space:normal; }
+    #validationErrorOverlay .upload-issue-footer, #uploadReplacementReview footer { padding:14px 16px; }
+    #uploadReplacementReview .upload-review-content { padding:16px; }
+}
+</style>
+</head>
+
+<body data-nav-module="Upload Data" data-nav-parent="index.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <div class="container" id="uploadContainer">
+
+        <!-- ====== MAIN UPLOAD PAGE ====== -->
+        <div id="mainUploadPage">
+            <!-- Client Selection Warning -->
+            <div id="clientSelectionWarning" class="client-warning">
+                <span class="icon">⚠️</span>
+                <span><strong>Please select a client</strong> from the dropdown above before uploading data.</span>
+            </div>
+
+            <!-- STEP INDICATOR STRIP (Phase 1 of the Upload header reorg) -->
+            <div class="step-indicator" id="uploadStepIndicator">
+                <div class="step-item active" data-step="1">
+                    <span class="step-circle">1</span>
+                    <span class="step-label">Template</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-item" data-step="2">
+                    <span class="step-circle">2</span>
+                    <span class="step-label">Upload sheet</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-item" data-step="3">
+                    <span class="step-circle">3</span>
+                    <span class="step-label">Map columns</span>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-item" data-step="4">
+                    <span class="step-circle">4</span>
+                    <span class="step-label">Review and import</span>
+                </div>
+            </div>
+
+            <!-- Select the destination template before choosing its source workbook. -->
+            <div class="top-bar">
+                <div class="top-bar-row">
+                    <div class="field" id="templateField">
+                        <label for="templateDropdown">📋 Template</label>
+                        <select id="templateDropdown"><option value="">-- Select --</option></select>
+                    </div>
+                    <div class="field-group" id="sheetDownloadGroup" style="display:none;">
+                        <button class="btn-download-icon" id="downloadBtn" type="button" title="Download selected template" aria-label="Download selected template" disabled>⬇️</button>
+                    </div>
+                    <div class="upload-file-group" id="uploadFileGroup" style="display:none;">
+                        <button class="btn-upload-file" id="uploadFileBtn" type="button" title="Upload an Excel file (.xlsx, .xls)">Upload File</button>
+                        <div class="file-detail" id="fileInfo" style="display:none;">
+                            <span class="name" id="fileName">file.xlsx</span>
+                            <span class="size" id="fileSize">0 KB</span>
+                            <button class="clear" id="clearBtn" type="button" title="Remove file" aria-label="Remove file">✕</button>
+                        </div>
+                        <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+                    </div>
+                    <div class="field" id="sheetField" style="display:none;">
+                        <label for="sheetSelector">📄 Sheet</label>
+                        <select id="sheetSelector"><option value="">-- Select --</option></select>
+                    </div>
+                    <div class="field" id="dateFormatGroup" style="display:none;">
+                        <button class="date-format-trigger" id="dateFormatTriggerBtn" type="button">
+                            📅 Date format: <span id="dateFormatTriggerLabel">DD/MM/YYYY</span>
+                        </button>
+                        <div class="date-format-popover" id="dateFormatPopover" style="display:none;">
+                            <div class="field">
+                                <label>📅 Date Delimiter</label>
+                                <select id="dateDelimiterDropdown">
+                                    <option value="/">/ (Slash)</option>
+                                    <option value="-">- (Dash)</option>
+                                    <option value="">No delimiter</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label>Date Order</label>
+                                <select id="dateOrderDropdown">
+                                    <!-- Populated by JS based on the delimiter selection -->
+                                </select>
+                            </div>
+                            <!-- Live sample-date preview (Phase 5): 2-3 raw -> parsed samples under the chosen format, or an error state. Populated by JS once mapping is known. -->
+                            <div class="field" id="dateFormatPreview" style="display:none;"></div>
+                        </div>
+                    </div>
+                    <button class="preview-btn" id="previewBtn" type="button">👁️ Preview</button>
+                    <button class="btn-databank" id="goToDataBankBtn" type="button" style="display:none;" disabled>📊 Go to Data Bank</button>
+                </div>
+            </div>
+
+            <!-- MAIN GRID -->
+            <div class="main-grid">
+
+                <!-- LEFT PANEL: hidden by default (id="leftPanel") -- without this, the panel's
+                     own border/background/box-shadow rendered as an empty rectangle even before
+                     any file was loaded, since only its children (#mappingPanel/#modeActions)
+                     had a hidden default state. Shown/hidden in lockstep with #mappingPanel by
+                     upload.js (see the leftPanel toggles next to every mappingPanel.style.display
+                     assignment). -->
+                <div class="left-panel" id="leftPanel" style="display:none;">
+
+                    <!-- Mapping Table -->
+                    <div id="mappingPanel" style="display:none;">
+                        <div class="section-title">
+                            🔗 Column Mapping
+                            <span class="count" id="mappingCount">0 / 0 matched</span>
+                            <button class="btn-save-mapping" id="saveMappingBtn" type="button"
+                                    title="Save Excel header choices for future uploads of this template/client; comparison rules belong to the template">💾 Save Mapping</button>
+                            <button class="btn-clear-mapping" id="clearMappingBtn" type="button"
+                                    title="Remove the saved mapping for this template/client">🗑️ Clear Saved Mapping</button>
+                        </div>
+                        <p id="savedMappingReviewNotice" hidden>The template changed since this mapping was saved. Review the current column choices and save them again; the old mapping was not applied.</p>
+                        <div style="overflow-x:auto;">
+                            <table class="mapping-table">
+                                <thead>
+                                    <tr>
+                                        <th>Template column</th>
+                                        <th>Excel Column</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="mappingBody"></tbody>
+                            </table>
+                        </div>
+                        <section id="sourceControlPanel" hidden aria-labelledby="sourceControlHeading">
+                            <div class="source-control-heading">
+                                <strong id="sourceControlHeading">Excel control totals</strong>
+                                <label for="sourceControlRow">Total row <input id="sourceControlRow" type="number" min="2" step="1" aria-describedby="sourceControlHelp sourceControlPreview"></label>
+                                <label><input id="sourceControlConfirmed" type="checkbox"> Confirm total row</label>
+                            </div>
+                            <p id="sourceControlHelp"></p>
+                            <p id="sourceControlPreview"></p>
+                            <div id="sourceControlResults" aria-live="polite"></div>
+                        </section>
+                    </div>
+
+                    <!-- Consolidated action bar: overwrite note + Upload/Reset (Download Template lives in the top bar) -->
+                    <div class="action-bar" id="modeActions" style="display:none;">
+                        <div class="action-note">
+                            <label for="comparisonModeDropdown" style="display:block; font-weight:600; margin-bottom:4px; color:#475569;">Report type</label>
+                            <select id="comparisonModeDropdown" style="padding:5px 8px; border:1px solid #cbd5e1; border-radius:5px; font-size:12px; color:#334155;">
+                                <option value="replace_range">Complete report — replace coverage</option>
+                                <option value="correction">Partial extract — matched corrections</option>
+                            </select>
+                            <div id="uploadCoverageFields" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                                <label>From <input type="text" id="uploadCoverageStart" inputmode="numeric" autocomplete="off" placeholder="DD/MM/YYYY" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
+                                <label>To <input type="text" id="uploadCoverageEnd" inputmode="numeric" autocomplete="off" placeholder="DD/MM/YYYY" aria-describedby="uploadCoverageHelp uploadCoverageHint"></label>
+                                <label id="uploadCoverageConfirmLabel" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+                                    <input type="checkbox" id="uploadConfirmCoverage" aria-describedby="uploadCoverageHint" title="Confirm and lock these dates until unchecked"> Confirm
+                                </label>
+                                <div style="flex-basis:100%;" aria-live="polite">
+                                    <span id="documentDateSuggestion">Map a Document Date role to see date suggestions.</span>
+                                </div>
+                                <label id="uploadEmptyConfirmLabel" style="flex-basis:100%;"><input type="checkbox" id="uploadConfirmEmpty"> Empty report — clear this period</label>
+                                <p id="uploadCoverageHelp" class="upload-inline-error" role="alert" hidden></p>
+                            </div>
+                            <div id="uploadCoverageHint" style="margin-top:4px;">Suggested dates cover transaction details only. Confirm the full ERP report period, including days with deleted vouchers; widen the dates first if needed.</div>
+                        </div>
+                        <div class="action-note">
+                            <p id="uploadBackupHelp" role="status">Checking the app backup setting…</p>
+                        </div>
+                        <span class="action-note">📄 Review new, unchanged, changed, and deleted rows before import.</span>
+                        <div id="ledgerUploadContext" hidden>
+                            <label for="ledgerAccountSelect">Trial Balance posting account <span aria-hidden="true">*</span></label>
+                            <div class="ledger-account-control">
+                                <input id="ledgerAccountSelect" type="text" role="combobox" required autocomplete="off"
+                                    aria-autocomplete="list" aria-controls="ledgerAccountOptions" aria-expanded="false"
+                                    aria-describedby="ledgerAccountHelp" placeholder="Search account name or code">
+                                <button id="ledgerAccountToggle" type="button" aria-label="Show ledger accounts" aria-controls="ledgerAccountOptions">▾</button>
+                                <div id="ledgerAccountOptions" role="listbox" aria-label="Trial Balance posting accounts" hidden></div>
+                            </div>
+                            <p id="ledgerAccountHelp" role="status" hidden></p>
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn-primary" id="importBtn" disabled>🚀 Upload</button>
+                            <button class="btn-neutral" id="resetBtn">🔄 Reset</button>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- RIGHT PANEL -->
+                <div class="right-panel">
+
+                    <!-- Row Selection Grid (Phase 2 of row-exclusion): checkbox per row, paginated.
+                         All rows are included by default -- unchecking a row excludes it from
+                         validate/import (routers/import_export.py's excluded_rows, Phase 1). -->
+                    <div id="rowExclusionContainer">
+                        <div class="row-exclusion-header">
+                            <span class="row-exclusion-title">☑️ Row Selection</span>
+                            <div class="row-exclusion-header-actions">
+                                <span class="rate-mode-badge" id="rateModeBadgeGrid" style="display:none;"></span>
+                                <span class="row-exclusion-counter" id="rowExclusionCounter">0 of 0 rows will be imported</span>
+                            </div>
+                        </div>
+                        <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
+                            <table>
+                                <thead>
+                                    <tr id="rowExclusionHeadRow">
+                                        <!-- Checkbox/Row-number headers + one <th> per Excel column, built by JS -->
+                                    </tr>
+                                </thead>
+                                <tbody id="rowExclusionBody">
+                                    <!-- Rows inserted by JavaScript -->
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="row-exclusion-footer">
+                            <span class="row-exclusion-range" id="rowExclusionRange">Showing 0-0 of 0 rows</span>
+                            <div class="preview-pagination">
+                                <button id="rowExclusionFirstPage" class="btn-pagination" type="button">&laquo;</button>
+                                <button id="rowExclusionPrevPage" class="btn-pagination" type="button">Previous</button>
+                                <span class="row-exclusion-page-info" id="rowExclusionPageInfo">Page 1 of 1</span>
+                                <button id="rowExclusionNextPage" class="btn-pagination" type="button">Next</button>
+                                <button id="rowExclusionLastPage" class="btn-pagination" type="button">&raquo;</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Exceptions list (Phase 3 of the row-level blank-field-rejection requirement):
+                         rows the backend rejected for a blank Document ID/Amount/Date, each with its
+                         own "Import anyway" toggle. Distinct panel from the Row Selection grid above --
+                         shown/hidden and populated by setRejectedRows()/renderRejectedRowsList() in
+                         upload.js. Toggling the checkbox is state-only this phase; it does not yet
+                         change what's sent to the backend (Phase 4). -->
+                    <div id="rowRejectionContainer" class="row-rejection-container">
+                        <div class="row-rejection-header">
+                            <span class="row-rejection-title">🚫 Exceptions — Rejected Rows</span>
+                            <span class="row-rejection-count" id="rowRejectionCount">0 row(s) rejected</span>
+                        </div>
+                        <div class="row-rejection-list" id="rowRejectionList">
+                            <!-- Exception rows inserted by JavaScript -->
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <!-- STATUS BAR -->
+            <!-- Hidden by default -- no initial placeholder text; showStatus() (upload.js) reveals
+                 this the moment there's a real message to show (error, success, progress). -->
+            <div class="status-bar info" id="statusBar" style="display:none;">
+                <span class="icon">ℹ️</span>
+                <span id="statusMessage"></span>
+                <span class="spacer" id="statusExtra"></span>
+                <!-- Import progress bar (Phase 3 of the Import Progress requirement): shown only
+                     while performImport()'s POST is in flight, filled by polling
+                     GET /api/upload/import-status/{file_id} (see pollImportProgress() in upload.js).
+                     Replaces the old importBtn spinner as the visual feedback for this step. -->
+                <div id="importProgressBar" class="import-progress-bar" style="display:none;">
+                    <div class="import-progress-track">
+                        <div class="import-progress-fill" id="importProgressFill"></div>
+                    </div>
+                    <div class="import-progress-label" id="importProgressLabel">0 of 0 transactions uploaded</div>
+                </div>
+            </div>
+
+            <p id="ledgerEvidenceSummary" role="status" hidden></p>
+
+            <!-- FOOTER -->
+            <div class="footer-meta" id="footerMeta" style="display:none;">
+                <span id="footerFile">📄 </span>
+                <span id="footerRows">📊 </span>
+                <span id="footerDate">📁 </span>
+            </div>
+        </div>
+
+        <!-- ====== PREVIEW SHEET (Hidden by default) ====== -->
+        <div class="preview-sheet" id="previewSheet">
+            <!-- Header -->
+            <div class="preview-header">
+                <div>
+                    <h2>📊 Excel Preview</h2>
+                    <a href="#" class="back-link" id="closePreviewBtn">← Back to Upload</a>
+                </div>
+                <div class="preview-header-controls">
+                    <span class="preview-info" id="previewInfo">0 rows · 0 columns</span>
+                    <label id="previewDataViewWrap">Show
+                        <select id="previewDataView" aria-label="Choose upload preview data">
+                            <option value="uploaded" selected>Uploaded data</option>
+                            <option value="all">All changes</option>
+                            <option value="added">Added</option>
+                            <option value="changed">Changed</option>
+                            <option value="deleted">Deleted</option>
+                        </select>
+                    </label>
+                    <span class="rate-mode-badge" id="rateModeBadgePreview" style="display:none;"></span>
+                    <div class="preview-pagesize-container">
+                        <label for="previewPageSize">Rows per page:</label>
+                        <select id="previewPageSize">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <p id="previewSourceNote" class="preview-info" role="status" hidden></p>
+            <!-- Table Area (flex:1, scrollable) -->
+            <div class="preview-table-wrapper">
+                <table class="preview-table">
+                    <thead id="previewSheetHead"></thead>
+                    <tbody id="previewSheetBody"></tbody>
+                </table>
+            </div>
+            <!-- Footer -->
+            <div class="preview-footer" id="previewFooter">
+                <span id="footerClient">🏢 <span id="footerClientName">ACME (001)</span></span>
+                <span id="footerUser">👤 <span id="footerUserName">Analyst</span></span>
+                <span id="footerTime">🕐 <span id="footerTimeValue">--:--</span></span>
+                <span id="footerDate">📅 <span id="footerDateValue">--/--/----</span></span>
+
+                <!-- Pagination Controls -->
+                <div class="preview-pagination">
+                    <span id="previewRowRange">Showing 0-0 of 0 rows</span>
+                    <button id="previewFirstPage" class="btn-pagination">&laquo;</button>
+                    <button id="previewPrevPage" class="btn-pagination">Previous</button>
+                    <span id="previewPageInfo">Page 1 of 1</span>
+                    <button id="previewNextPage" class="btn-pagination">Next</button>
+                    <button id="previewLastPage" class="btn-pagination">&raquo;</button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/client_context.js?v=30"></script>
+    <dialog id="uploadReplacementReview" aria-label="Review complete report replacement">
+        <header>
+            <h2>Review complete report</h2>
+            <p id="uploadReplacementScope"></p>
+            <p id="uploadReplacementPeriod"></p>
+        </header>
+        <div class="upload-review-content">
+            <table aria-label="Rows to review">
+                <thead><tr><th scope="col">Rows</th><th scope="col" class="upload-review-count">Count</th></tr></thead>
+                <tbody id="uploadReplacementCounts"></tbody>
+            </table>
+            <div id="uploadReplacementVouchers" hidden>
+                <span>Changed vouchers <strong id="uploadReplacementChangedVouchers"></strong></span>
+                <span>Deleted vouchers <strong id="uploadReplacementRemovedVouchers"></strong></span>
+            </div>
+            <table class="upload-review-notes" aria-label="Replacement safeguards">
+                <tbody>
+                    <tr><td>Record history</td><td id="uploadReplacementBackup">The native import preserves the configured history and completion evidence.</td></tr>
+                    <tr><td>Date changes</td><td>The same voucher may be replaced outside this period.</td></tr>
+                    <tr><td>Other vouchers</td><td>Outside this period: kept.</td></tr>
+                </tbody>
+            </table>
+            <div id="uploadReplacementDateMoves" hidden>
+                <h3>Voucher dates changed outside this period</h3>
+                <table aria-label="Voucher date changes">
+                    <thead><tr><th scope="col">Voucher</th><th scope="col">Previous dates</th><th scope="col">Incoming dates</th></tr></thead>
+                    <tbody id="uploadReplacementDateMoveRows"></tbody>
+                </table>
+            </div>
+            <p id="uploadReplacementStalePlan" role="alert" hidden>This review is no longer current. Return to Upload and validate the file again before importing.</p>
+        </div>
+        <footer>
+            <button type="button" id="uploadReplacementCancel">Back</button>
+            <button type="button" id="uploadReplacementPreview">👁 Preview changes</button>
+            <button type="button" id="uploadReplacementConfirm">Import</button>
+        </footer>
+    </dialog>
+    <script src="/static/upload.js?v=35"></script>
+</body>
+
+</html>

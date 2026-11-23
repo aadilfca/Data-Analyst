@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Migrate the complete application backend, financial calculations, reports, Excel exports and jobs to ASP.NET Core/C#. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` provides the service foundation. Retain existing HTML/CSS/JavaScript. Python remains the working comparison/rollback application until each replacement is accepted; no separate Python report service is planned.
+Migrate the complete application backend, frontend, financial calculations, reports, Excel exports and jobs to ASP.NET Core/C#. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` provides the service foundation. Keep the Python app separate and unchanged through the final data-fetch speed comparison; it is never a C# runtime or package dependency.
 
 Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11. P01–P07 are locally accepted. See [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [current contracts](MIGRATION_CONTRACTS.md). Each implementation phase requires file/approach approval.
 
@@ -13,7 +13,7 @@ From this folder, use `.\.dotnet\dotnet.exe`, not `dotnet` from PATH. `global.js
 ## Agreed technology direction
 
 - **Runtime/API:** .NET 10 LTS and ASP.NET Core Web API, organized as feature-oriented controllers and service classes in one modular service.
-- **Frontend:** retain existing HTML, CSS, JavaScript, navigation, and API behavior while ASP.NET Core takes over hosting and backend requests.
+- **Frontend:** maintain every active C# page and required asset independently in `dotnet-uploader/frontend`; preserve behavior and API contracts. The C# host and package must not fall back to root `static/`. Google Drive is outside C# scope.
 - **Database:** use the existing Supabase PostgreSQL database. Use one configured `NpgsqlDataSource` and parameterized Npgsql/Dapper SQL for explicit transaction control. The C# service must not connect to SQLite.
 - **Data contract:** `client_data` remains the only current transaction store; keep raw values and report-required derived fields together. `client_data_history` retains prior changed/deleted row snapshots. Do not add durable full-row transaction copies.
 - **Capacity:** Aadil selected the 500 MB Free-plan ceiling; [P02 C01](MIGRATION_CONTRACTS.md) defines projected-total checks. Existing Python/root-guide 400 MB rules await separately approved alignment.
@@ -37,7 +37,7 @@ From this folder, use `.\.dotnet\dotnet.exe`, not `dotnet` from PATH. `global.js
 
 ## Phased implementation plan
 
-Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57 → P59–P63. Existing IDs remain stable; Google Drive integration is removed from the plan. P02 records dependencies.
+Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (reports) → P41–P52 (audit modules) → P57 → P59–P63. Existing IDs remain stable; Google Drive is excluded from C# scope. P02 records dependencies.
 
 | Phase / area | Bounded work and acceptance condition |
 |---|---|
@@ -109,14 +109,23 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P52 — Audit Workbook | Port Workbook reads, filters, badges, print data, and operational exports; verify shared-modal behavior and Verification parity. |
 | P57 — Dashboard/admin | Backend implementation accepted; default-off workspace statistics and administrator error APIs. Candidate `0023` remains unapplied; selected workflow review is deferred to P62 staging. See CHANGELOG_ARCHIVE.md. |
 | P59 — Backups | Implemented default-off local C# full-database ZIP and isolated restore; existing C# current/history workbook proof gates selected-template purge. No Drive integration or live migration. Automated checks pass; Aadil's C# Setup test remains. See CHANGELOG_ARCHIVE.md. |
-| P60 — Operational tools | Added a separate C# tray launcher with actionable readiness diagnostics and per-user local configuration guidance; Python launcher remains the rollback until P63. Manual tray/database check remains. No Python tool retired. |
+| P60 — Operational tools | Added a separate C# tray launcher with actionable readiness diagnostics and per-user local configuration guidance; Python remains separate for the final speed comparison. Manual tray/database check remains. No Python tool retired. |
 | P61 — System readiness | Database foundation 33/33 and backup/recovery 3/3 pass; configured local server, readiness, login shell and tray checks are accepted. Feature acceptance is deferred to P62. |
 | P62 — Deployment rehearsal | Non-Render Linux container and Supabase readiness passed; API-role grants are isolated. Render preview is excluded; Aadil's selected-feature acceptance remains. |
-| P63 — Controlled cutover | Separate production gate: requires staging acceptance, protected recovery copy on a different device, provider baseline and explicit cutover approval. Keep Python rollback available until accepted. |
+| P63 — Controlled cutover | Separate production gate: requires staging acceptance, protected recovery copy on a different device, provider baseline and explicit cutover approval. Python retirement follows the final speed comparison. |
 
 ## Remaining cutover work packages
 
 These packages use the existing phase IDs; finish each before its dependent package.
+
+### Phase 3 — Independent C# frontend
+
+| Mini-phase | Result required |
+|---|---|
+| 3A. Inventory | Map every page, script, style, asset and API call; classify active, retired or unavailable. |
+| 3B. C# ownership | Create independent `frontend/` copies for every active C# page and required asset; point them to C# APIs and exclude Google Drive. |
+| 3C. Host/package | Serve and package only `frontend/`; remove root `static/` fallback and build inputs. Unported pages state that they are unavailable. |
+| 3D. Proof | Verify page/API coverage and inspect the built package for root-static, Python and Google Drive runtime assets. Keep Python unchanged for the final speed comparison. |
 
 | Package | Result required |
 |---|---|
@@ -171,7 +180,7 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - `PostgresAuditWriter` requires the supplied write context and trusted server inputs; module ports integrate it with their mutations. Diagnostic capture uses safe symbols and route templates. `LogPersistence__...` limits are defined in [the audit/error contract](AUDIT_ERROR_CONTRACT.md); diagnostics never read request bodies, queries or cookies.
 - Candidate `database/migrations/0001_audit_error.sql` is executed only by owned test fixtures here. Runtime startup performs no DDL. Deployed catalog/capacity evidence and explicit execution approval remain required; P05C handles historical reconciliation and P07/P57 authentication/dashboard integration.
 - `tools/AuditPlatform.LogRehearsal` uses the installed ASP.NET shared runtime and existing packages, but starts no web host. Tests generate owned PostgreSQL clusters and synthetic JSON; the CLI requires `--input`/`--owner-dir` plus secret environment variable `AUDIT_REHEARSAL_CONNECTION`. Input stays in that owned run directory; it does not read SQLite or Python settings. See [reconciliation gates](AUDIT_ERROR_CONTRACT.md#historical-reconciliation-and-delivery-gates).
-- The P06 forwarding bridge is removed from the C# runtime; Python remains a separate rollback app until P63. Native modules remain individually gated. P07 authentication is disabled by default.
+- The P06 forwarding bridge is removed. Keep Python as a separate, unchanged comparison app through the final speed test; C# never invokes it. Native modules remain individually gated. P07 authentication is disabled by default.
 - P07 requires `Authentication__Enabled=true` and a canonical `Authentication__PublicOrigin`; HTTP is limited to localhost. Shared audit schema verification and separate approval precede deployment.
 - P07B's candidate `database/migrations/0003_tenant_foundation.sql` runs only in owned isolated fixtures; startup never applies it. It seeds no records, and repeat application fails safely. Membership lookup grants no client or engagement access.
 - P07C's candidate `database/migrations/0004_engagement_foundation.sql` is isolated-fixture only; startup never applies it. Team eligibility grants no client access or action permission.

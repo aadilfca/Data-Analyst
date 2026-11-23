@@ -1,0 +1,1275 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trial Balance</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <!-- SheetJS: reads the selected file client-side (same CDN version upload.html already
+         uses) to build the small mapping-window preview table's row data. -->
+    <script src="/static/xlsx.full.min.js"></script>
+    <style>
+        /* ---------- IMPORT PROGRESS BAR (Fast Trial Balance upload) ----------
+           Same .import-progress-* class names/rules upload.html already defines in its own
+           inline <style> block (this project keeps this progress-bar CSS local to each page
+           rather than in the shared style.css, confirmed by grepping style.css for it). */
+        .import-progress-bar {
+            flex-basis: 100%;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .import-progress-track {
+            flex: 1 1 auto;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .import-progress-fill {
+            height: 100%;
+            width: 0%;
+            background: #f59e0b;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        .import-progress-label {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        /* ---------- FORM AREA ---------- */
+        .tb-form-group {
+            background: white;
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .tb-form-group h3 {
+            font-size: 16px;
+            color: #1a1a2e;
+            margin-bottom: 4px;
+        }
+
+        .tb-form-group .group-hint {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 16px;
+        }
+
+        .tb-field-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+        }
+
+        .tb-upload-toolbar {
+            display: grid;
+            grid-template-columns: minmax(280px, 1.8fr) minmax(140px, 0.85fr)
+                minmax(140px, 0.85fr) minmax(140px, 0.85fr) auto;
+            align-items: end;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .tb-upload-field {
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .tb-upload-toolbar.has-selected-file .tb-upload-field {
+            display: flex;
+        }
+
+        .tb-upload-field label {
+            color: #64748b;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .tb-upload-field input[type="date"],
+        .tb-upload-field select {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            height: 36px;
+        }
+
+        .tb-upload-file-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .tb-upload-file-group .file-detail {
+            box-sizing: border-box;
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: 100%;
+        }
+
+        .tb-upload-file-group .file-detail .name {
+            overflow: hidden;
+            min-width: 0;
+            max-width: 230px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tb-upload-toolbar #availableTrialBalancesBtn {
+            justify-self: end;
+            margin-left: 0;
+        }
+
+        @media (max-width: 1100px) {
+            .tb-upload-toolbar {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+
+            .tb-upload-file-group {
+                grid-column: span 2;
+            }
+        }
+
+        @media (max-width: 720px) {
+            .tb-upload-toolbar {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .tb-upload-file-group {
+                grid-column: 1 / -1;
+            }
+
+            .tb-upload-toolbar #availableTrialBalancesBtn {
+                justify-self: start;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .tb-upload-toolbar {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .tb-upload-toolbar > * {
+                grid-column: 1;
+            }
+
+            .tb-upload-file-group {
+                flex-wrap: wrap;
+            }
+        }
+
+        .tb-field-row label {
+            font-weight: 600;
+            font-size: 13px;
+            color: #1e293b;
+            white-space: nowrap;
+        }
+
+        .tb-field-row input[type="date"] {
+            padding: 6px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        /* Section 2, Phase 6: Period Type dropdown -- same sizing as the date inputs above. */
+        .tb-field-row select {
+            padding: 6px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        /* ---------- UPLOAD FILE BUTTON (same visual language as upload.html's .btn-upload-file) ---------- */
+        .btn-upload-file {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            padding: 6px 18px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.2s;
+        }
+
+        .btn-upload-file:hover {
+            background: #2563eb;
+        }
+
+        .upload-file-btn-main {
+            font-size: 13px;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+
+        .upload-file-btn-sub {
+            font-size: 10px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.8);
+            line-height: 1.2;
+        }
+
+        /* Selected-file chip (filename + size + clear button) -- reused verbatim from
+           upload.html's .file-detail styling. */
+        .file-detail {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            padding: 4px 12px;
+            border-radius: 6px;
+        }
+
+        .file-detail .name {
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .file-detail .size {
+            color: #94a3b8;
+            font-size: 11px;
+        }
+
+        .file-detail .clear {
+            background: none;
+            border: none;
+            color: #dc2626;
+            font-size: 14px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+
+        .file-detail .clear:hover {
+            color: #b91c1c;
+        }
+
+        .btn-primary-action {
+            padding: 8px 20px;
+            background: #16a34a;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-primary-action:hover:not(:disabled) {
+            background: #15803d;
+        }
+
+        .btn-primary-action:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        /* ---------- SECONDARY ACTION BUTTON (Available Trial Balances trigger + its own
+           Upload TB button) -- outline style, distinct from the filled-green .btn-primary-action
+           used for the actual Upload & Classify submit. ---------- */
+        .btn-secondary-action {
+            padding: 7px 16px;
+            background: white;
+            color: #2563eb;
+            border: 1px solid #93c5fd;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+
+        .btn-secondary-action:hover {
+            background: #eff6ff;
+            border-color: #60a5fa;
+        }
+
+        /* The Available Trial Balances trigger sits at the right end of the upload toolbar. */
+        #availableTrialBalancesBtn {
+            margin-left: auto;
+        }
+
+        /* ---------- DANGER ACTION BUTTON (Delete Upload) ---------- */
+        /* Same size/shape as .btn-secondary-action, red palette to signal a
+           destructive action -- distinct from the blue outline used elsewhere. */
+        .btn-danger-action {
+            padding: 7px 16px;
+            background: white;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            white-space: nowrap;
+        }
+
+        .btn-danger-action:hover {
+            background: #fef2f2;
+            border-color: #f87171;
+        }
+
+        /* ---------- CLIENT SELECTION WARNING (same as upload.html's .client-warning) ---------- */
+        .client-warning {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            background: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-bottom: 16px;
+            color: #92400e;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .client-warning .icon {
+            font-size: 20px;
+        }
+
+        .client-warning strong {
+            color: #78350f;
+        }
+
+        /* ---------- STATUS BAR (same as upload.html's .status-bar) ---------- */
+        .status-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 20px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            align-items: center;
+            border: 1px solid #e2e8f0;
+            margin-bottom: 16px;
+        }
+
+        .status-bar.success {
+            background: #dcfce7;
+            border-color: #bbf7d0;
+            color: #166534;
+        }
+
+        .status-bar.info {
+            background: #eff6ff;
+            border-color: #bfdbfe;
+            color: #1e40af;
+        }
+
+        .status-bar.error {
+            background: #fee2e2;
+            border-color: #fecaca;
+            color: #991b1b;
+        }
+
+        .status-bar.loading {
+            background: #fef3c7;
+            border-color: #fde68a;
+            color: #92400e;
+        }
+        .tb-toast-region { position: fixed; top: 78px; right: 20px; z-index: 7000; display: grid; gap: 8px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+        .tb-toast { display: flex; align-items: flex-start; gap: 10px; box-sizing: border-box; padding: 11px 12px; border: 1px solid #bfdbfe; border-radius: 8px; background: #eff6ff; color: #1e40af; box-shadow: 0 10px 28px rgba(15, 23, 42, .18); font-size: 13px; line-height: 1.4; pointer-events: auto; }
+        .tb-toast.success { border-color: #bbf7d0; background: #f0fdf4; color: #166534; }
+        .tb-toast.error { border-color: #fecaca; background: #fef2f2; color: #991b1b; }
+        .tb-toast-icon { flex: 0 0 auto; font-weight: 800; }
+        .tb-toast-message { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+        .tb-toast-close { display: grid; flex: 0 0 22px; width: 22px; height: 22px; place-items: center; margin: -3px -3px 0 0; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; font-size: 17px; line-height: 1; cursor: pointer; opacity: .72; }
+        .tb-toast-close:hover, .tb-toast-close:focus-visible { background: rgba(15, 23, 42, .08); opacity: 1; }
+        .tb-toast-close:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+        @media (max-width: 600px) { .tb-toast-region { top: 72px; right: 12px; width: calc(100vw - 24px); } }
+
+        /* ---------- SUMMARY DISPLAY (Phase 3's summary endpoint rendered as simple tiles) ---------- */
+        .tb-summary-tiles {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .tb-summary-tile {
+            flex: 1;
+            min-width: 120px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px 16px;
+            text-align: center;
+        }
+
+        .tb-summary-tile .tile-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        .tb-summary-tile .tile-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+        }
+
+        /* ---------- REVIEW TABLE (Phase 5: review classifications + manual override) ---------- */
+        .tb-review-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .tb-review-table th,
+        .tb-review-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .tb-review-table th {
+            background: #f8fafc;
+            font-size: 11px;
+            font-weight: 600;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .tb-review-table tbody tr:hover {
+            background: #f8fafc;
+        }
+
+        .tb-classification-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .tb-classification-badge.leaf {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .tb-classification-badge.parent {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .tb-overridden-tag {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 1px 7px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .tb-toggle-btn {
+            padding: 4px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            background: white;
+            color: #1e293b;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .tb-toggle-btn:hover {
+            background: #f1f5f9;
+            border-color: #94a3b8;
+        }
+
+        .tb-review-table-wrapper {
+            max-height: 480px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+
+        /* Keep the Available Trial Balances amount columns readable on narrow screens. */
+        #availableAccountsTableWrapper {
+            overflow-x: auto;
+        }
+
+        #availableAccountsTableWrapper .tb-review-table {
+            min-width: 1500px;
+        }
+
+        #availableAccountsTableWrapper .tb-amount-cell {
+            text-align: right;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+        }
+        #availableTrialBalancesSection { padding: 0; margin-top: -4px; background: transparent; box-shadow: none; }
+        .tb-saved-toolbar { display: grid; grid-template-rows: auto auto; gap: 6px; margin: 0 0 9px; }
+        .tb-saved-toolbar-row { display: flex; align-items: center; flex-wrap: nowrap; gap: 12px; min-height: 38px; }
+        .tb-saved-toolbar-row h3 { flex: 0 0 auto; margin: 0; }
+        .tb-saved-toolbar-row--source h3 { margin-right: 8px; }
+        .tb-saved-toolbar-row--filters { gap: 12px; }
+        #availableTrialBalancesSection [hidden] { display: none !important; }
+        .tb-saved-toolbar-row select { box-sizing: border-box; min-height: 38px; padding: 7px 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1e293b; font: inherit; font-size: 13px; }
+        #tbAssignmentWorkflow { width: 210px; max-width: 24vw; }
+        .tb-saved-period-field { display: flex; flex: 0 1 auto; align-items: center; gap: 9px; min-width: 0; }
+        .tb-saved-workflow-field { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; min-width: 0; }
+        #availableUploadsDropdown { width: 270px; max-width: min(34vw, 360px); }
+        .tb-saved-source-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-left: auto; }
+        .tb-saved-toolbar-row .btn-secondary-action, .tb-saved-toolbar-row .btn-danger-action { box-sizing: border-box; display: inline-flex; min-height: 38px; align-items: center; justify-content: center; border-radius: 8px; }
+        #tbAssignmentSetup { position: fixed; right: 24px; bottom: 48px; z-index: 100; display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 50%; background: #234b67; color: #fff; box-shadow: 0 3px 12px #18364d35; cursor: pointer; }
+        #tbAssignmentSetup:disabled { opacity: .5; cursor: default; }
+        #tbAssignmentSetup svg { width: 23px; height: 23px; }
+        #tbAssignmentSetup:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        #tbNextUnassigned { position: fixed; right: 24px; bottom: 102px; z-index: 100; display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 50%; background: #147d86; color: #fff; box-shadow: 0 3px 12px #18364d35; cursor: pointer; }
+        #tbNextUnassigned[hidden] { display: none; }
+        #tbNextUnassigned:hover:not(:disabled) { background: #106a72; }
+        #tbNextUnassigned:disabled { background: #64748b; cursor: default; }
+        #tbNextUnassigned svg { width: 23px; height: 23px; }
+        #tbNextUnassigned:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        #tbNextUnassignedCount { position: absolute; top: -4px; right: -4px; display: grid; min-width: 19px; height: 19px; place-items: center; padding: 0 3px; border: 2px solid #fff; border-radius: 11px; background: #b42318; color: #fff; font-size: 10px; font-weight: 800; line-height: 1; }
+        #tbNextUnassignedCount[hidden] { display: none; }
+        #availableAccountsTableBody .acc2-fs-picker-trigger.is-unassigned { border-color: #f3b7b7; background: #fff5f5; }
+        #availableAccountsTableBody .acc2-fs-picker-trigger.is-unassigned [data-fs-picker-value-label] { color: #b42318; font-weight: 700; }
+        #tbAssignmentSetupMenu { position: fixed; right: 24px; bottom: 104px; z-index: 101; display: grid; min-width: 220px; max-width: calc(100vw - 48px); padding: 6px; border: 1px solid #d6e0e8; border-radius: 9px; background: white; box-shadow: 0 6px 24px #18364d26; }
+        #tbAssignmentSetupMenu a { padding: 9px 11px; color: #234b67; text-decoration: none; border-radius: 5px; font-size: 13px; }
+        #tbAssignmentSetupMenu a:hover, #tbAssignmentSetupMenu a:focus-visible { background: #eef4f8; }
+        .tb-saved-toolbar-row--filters #tbAssignCategoriesBtn { margin-left: 4px; }
+        #availableAccountsTableWrapper { max-height: none; overflow-y: visible; border: 0; border-radius: 0; }
+        #availableAccountsTableWrapper { scrollbar-width: none; }
+        #availableAccountsTableWrapper::-webkit-scrollbar { display: none; }
+        .tb-saved-sticky { position: sticky; top: 70px; z-index: 3; overflow: hidden; background: #f1f5f9; }
+        .tb-saved-sticky[hidden] { display: none; }
+        .tb-saved-table { width: 100%; min-width: 1500px; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-saved-table th, .tb-saved-table td { box-sizing: border-box; padding: 6px 8px; border: 1px solid #e2e8f0; overflow-wrap: anywhere; }
+        .tb-saved-table th { background: #f1f5f9; text-align: left; padding: 8px 10px; }
+        .tb-saved-table td { background: #fff; }
+        .tb-saved-table tbody tr:nth-child(even) td { background: #fafcff; }
+        .tb-saved-table .tb-amount-cell { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .tb-saved-table input { box-sizing: border-box; width: 100%; }
+        .tb-saved-category-filter, .tb-saved-note-filter { display: flex; align-items: center; gap: 7px; position: relative; }
+        .tb-saved-toolbar-row label { font-size: 13px; font-weight: 600; color: #34495e; white-space: nowrap; }
+        .tb-saved-filter-picker { flex: 0 0 210px; width: 210px; min-width: 0; }
+        .tb-saved-filter-picker .acc2-fs-picker-trigger { min-height: 38px; border-radius: 8px; padding-right: 14px; padding-left: 14px; font-size: 13px; }
+        .tb-saved-filter-picker .acc2-fs-picker-menu { max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); }
+        .tb-saved-filter-picker .acc2-fs-picker-search { box-sizing: border-box; width: calc(100% - 20px); }
+        .tb-saved-filter-actions { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px 7px; color: #748391; font-size: 11px; }
+        .tb-saved-filter-clear[hidden] { display: none; }
+        .tb-saved-filter-clear { border: 0; padding: 3px 0; background: transparent; color: #1769aa; font: inherit; font-weight: 600; cursor: pointer; }
+        .tb-saved-filter-clear:hover { color: #0d4f81; text-decoration: underline; }
+        .tb-saved-filter-clear:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; }
+        .tb-saved-filter-options { flex: 1 1 auto; }
+        .tb-saved-filter-options [data-saved-filter-option][hidden] { display: none; }
+        .tb-saved-filter-options [data-fs-picker-section][hidden], .tb-saved-filter-options [data-fs-picker-heading-group][hidden] { display: none; }
+        .tb-saved-filter-no-matches { padding: 8px 12px; color: #748391; font-size: 11px; }
+        #tbSavedCategoryNoMatches { margin: 0 0 10px; color: #64748b; font-size: 13px; }
+        #tbSavedCategoryNoMatches[hidden] { display: none; }
+        @media (max-width: 900px) {
+            .tb-saved-toolbar-row { flex-wrap: wrap; }
+            .tb-saved-toolbar-row--source .tb-saved-source-actions { margin-left: auto; }
+            .tb-saved-toolbar-row--filters { align-items: flex-start; }
+        }
+        @media (max-width: 600px) {
+            .tb-saved-filter-picker { flex-basis: min(210px, 55vw); width: min(210px, 55vw); }
+            #tbAssignmentWorkflow { max-width: 55vw; }
+            #availableUploadsDropdown { max-width: 62vw; }
+            .tb-saved-workflow-field { flex-wrap: wrap; }
+            .tb-saved-source-actions { margin-left: 0; }
+        }
+        #availableAccountsTableWrapper thead { display: none; }
+
+        /* ---------- COLUMN MAPPING (Section 1, Phase 2) ---------- */
+        /* Reuses .tb-review-table/.tb-review-table-wrapper as-is for both the mapping
+           table and the preview table; this is the one style addition needed since
+           .tb-review-table never previously held a <select>. */
+        .tb-review-table select {
+            padding: 6px 10px;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-size: 13px;
+            width: 100%;
+            max-width: 280px;
+        }
+
+        .tb-code-review-input { min-width: 150px; width: 100%; }
+        .tb-account-code-error-popup { position:fixed; z-index:1500; display:flex; align-items:flex-start; gap:9px; width:max-content; max-width:min(280px, calc(100vw - 24px)); box-sizing:border-box; padding:8px 10px; border:1px solid #efb2b2; border-radius:8px; background:#fff7f7; color:#9f2020; box-shadow:0 6px 20px #25344930; font-size:12px; font-weight:650; line-height:1.4; }
+        .tb-account-code-error-message { flex:1 1 auto; }
+        .tb-account-code-error-close { flex:0 0 auto; margin:-2px -3px 0 0; border:0; padding:2px 4px; background:transparent; color:inherit; font:inherit; font-size:15px; line-height:1; cursor:pointer; }
+        .tb-account-code-error-close:focus-visible { outline:2px solid #b42318; outline-offset:2px; border-radius:3px; }
+        .tb-code-correction-cell { min-width: 210px; }
+
+        .tb-mapping-review-grid {
+            display: grid;
+            grid-template-columns: minmax(320px, 0.85fr) minmax(0, 1.15fr);
+            gap: 16px;
+            align-items: stretch;
+        }
+
+        .tb-mapping-pane {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .tb-mapping-pane h3 { margin: 0 0 6px; }
+        .tb-mapping-pane .group-hint { margin-bottom: 10px; }
+        .tb-mapping-heading {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .tb-mapping-heading > div { min-width: 0; }
+        .tb-mapping-pane .tb-review-table-wrapper {
+            flex: 1;
+            max-height: none;
+            overflow: visible;
+        }
+
+        .tb-preview-heading {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .tb-preview-heading .group-hint { margin-bottom: 10px; }
+        .tb-preview-pane .tb-review-table-wrapper {
+            max-height: none;
+            overflow-x: auto;
+            overflow-y: visible;
+        }
+        .tb-preview-pane .tb-review-table { min-width: max-content; }
+        .tb-preview-pane .tb-review-table th,
+        .tb-preview-pane .tb-review-table td { white-space: nowrap; }
+
+        .main-container.tb-validation-active > :not(#tbValidationSheet) { display: none !important; }
+        #uploadViewContainer[hidden],
+        #tbValidationSheet[hidden] { display: none !important; }
+
+        .tb-validation-sheet {
+            display: none;
+            box-sizing: border-box;
+            padding: 18px 24px 16px;
+            background: #fff;
+            width: 100%;
+            min-width: 0;
+        }
+
+        .tb-validation-sheet.active { display: block; }
+        .tb-validation-header {
+            display: block;
+            margin-bottom: 12px;
+            scroll-margin-top: 88px;
+        }
+        .tb-validation-top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .tb-validation-title { flex: 0 0 auto; min-width: 0; }
+
+        .tb-validation-header h2 { margin: 0 0 3px; font-size: 20px; color: #1e293b; }
+        .tb-validation-header p { margin: 0; color: #64748b; font-size: 12px; }
+        .tb-validation-header-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+            gap: 8px;
+            min-width: 0;
+            flex: 1 1 auto;
+        }
+        .tb-validation-status {
+            box-sizing: border-box;
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            flex: 1 1 100%;
+        }
+
+        .tb-validation-table-wrap { width: 100%; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+        .tb-validation-table-wrap::-webkit-scrollbar { display: none; }
+        .tb-validation-universal-scrollbar { position: fixed; bottom: 10px; z-index: 90; display: flex; align-items: center; height: 18px; padding: 4px 9px; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 9px; background: rgba(248, 251, 253, .96); box-shadow: 0 4px 14px rgba(15, 23, 42, .16); }
+        .tb-validation-universal-scrollbar[hidden] { display: none; }
+        .tb-validation-universal-scrollbar:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        .tb-validation-universal-scrollbar-track { position: relative; width: 100%; height: 6px; border-radius: 999px; background: #dbe4ea; cursor: pointer; }
+        .tb-validation-universal-scrollbar-thumb { position: absolute; top: 0; left: 0; width: 48px; height: 6px; min-width: 48px; border-radius: 999px; background: #64748b; cursor: grab; touch-action: none; }
+        .tb-validation-universal-scrollbar-thumb:hover, .tb-validation-universal-scrollbar-thumb.is-dragging { background: #334e60; }
+        .tb-validation-universal-scrollbar-thumb.is-dragging { cursor: grabbing; }
+        .tb-validation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; }
+        .tb-validation-table th, .tb-validation-table td { box-sizing: border-box; }
+        .tb-validation-table th {
+            position: sticky;
+            top: 70px;
+            z-index: 2;
+            padding: 8px 10px;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            text-align: left;
+            overflow-wrap: anywhere;
+        }
+        .tb-validation-table th.tb-validation-classification { overflow-wrap: normal; }
+        .tb-validation-table td {
+            padding: 6px 8px;
+            border: 1px solid #e2e8f0;
+            overflow-wrap: anywhere;
+            background: #fff;
+        }
+        .tb-validation-table th.tb-validation-amount,
+        .tb-validation-table td.tb-validation-amount { white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+        .tb-validation-table th.tb-validation-amount { white-space: normal; }
+        .tb-validation-table tr:nth-child(even) td { background: #fafcff; }
+        .tb-validation-table .tb-validation-issue-cell { white-space: normal; min-width: 0; color: #b91c1c; }
+        .tb-validation-issue-content > span { display: block; }
+        .tb-validation-issue-content .tb-validation-warning { color: #a16207; }
+        .tb-validation-classification-display,
+        .tb-account-code-display { cursor: pointer; }
+        .tb-validation-table td.tb-validation-classification[data-excel-row] { cursor: pointer; }
+        .tb-validation-classification-display:hover,
+        .tb-account-code-display:hover { outline: 1px dashed #64748b; outline-offset: 2px; }
+        .tb-validation-table input,
+        .tb-validation-table select { box-sizing: border-box; width: 100%; min-width: 0; padding: 5px 4px; }
+        .tb-validation-table .tb-code-review-input { width: 100%; }
+        .tb-validation-actions { display: flex; align-items: center; gap: 8px; }
+        .tb-validation-progress { margin: 0 0 12px; }
+        .tb-validation-subtotal-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 6px;
+            margin: 0;
+            color: #64748b;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        .tb-validation-subtotal-toolbar button { white-space: nowrap; padding: 6px 8px; }
+        .tb-validation-subtotal-toolbar[hidden] { display: none !important; }
+        .tb-validation-subtotal-toolbar button[hidden] { display: none !important; }
+        .tb-validation-table tr.tb-subtotal-row td { background: #f8fafc; color: #64748b; }
+        .tb-validation-table tr.tb-difference-section td,
+        .tb-review-table tr.tb-difference-section td {
+            background: #fef2f2;
+            color: #991b1b;
+            font-weight: 700;
+        }
+        .tb-validation-table tr.tb-generated-difference td,
+        .tb-review-table tr.tb-generated-difference td {
+            color: #b91c1c;
+            font-weight: 700;
+        }
+        .tb-subtotal-row-action { max-width: 100%; white-space: normal; padding: 4px 6px; font-size: 11px; }
+        .tb-critical-issue-navigator {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            z-index: 1100;
+            display: grid;
+            place-items: center;
+            width: 58px;
+            height: 58px;
+            padding: 0;
+            border: 0;
+            border-radius: 50%;
+            color: #fff;
+            background: #1e3a8a;
+            box-shadow: 0 6px 18px rgba(15, 23, 42, .28);
+            cursor: pointer;
+            transition: transform .16s ease, background-color .16s ease, box-shadow .16s ease;
+        }
+        .tb-critical-issue-navigator:hover:not(:disabled) {
+            background: #1d4ed8;
+            box-shadow: 0 8px 22px rgba(15, 23, 42, .34);
+            transform: translateY(-2px);
+        }
+        .tb-critical-issue-navigator:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+        .tb-critical-issue-navigator:disabled { background: #64748b; box-shadow: 0 3px 10px rgba(15, 23, 42, .18); cursor: not-allowed; }
+        .tb-critical-issue-icon { width: 25px; height: 25px; }
+        .tb-critical-issue-count {
+            position: absolute;
+            right: -7px;
+            bottom: -4px;
+            min-width: 28px;
+            padding: 2px 5px;
+            border: 2px solid #fff;
+            border-radius: 999px;
+            color: #fff;
+            background: #b91c1c;
+            font-size: 9px;
+            font-weight: 700;
+            line-height: 1.2;
+            text-align: center;
+        }
+        @keyframes tb-critical-row-highlight {
+            0%, 100% { background-color: transparent; }
+            18%, 72% { background-color: #fecaca; }
+        }
+        .tb-validation-table tr.tb-critical-row-highlight > td {
+            animation: tb-critical-row-highlight 1.8s ease-out;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .tb-critical-issue-navigator { transition: none; }
+            .tb-validation-table tr.tb-critical-row-highlight > td { animation-duration: .01ms; }
+        }
+
+        /* Reuse the synchronized heading whenever the readable table needs scrolling. */
+        .tb-validation-sticky-head {
+            position: sticky;
+            top: 70px;
+            z-index: 3;
+            display: block;
+            width: 100%;
+            overflow: hidden;
+            background: #f1f5f9;
+        }
+        .tb-validation-sticky-head .tb-validation-table { transform: translateX(0); }
+        .tb-validation-sticky-head .tb-validation-table th { position: static; }
+        .tb-validation-table-wrap .tb-validation-table thead { display: none; }
+
+        @media (max-width: 850px) {
+            .tb-mapping-review-grid { grid-template-columns: minmax(0, 1fr); }
+        }
+
+        @media (max-width: 560px) {
+            .tb-validation-sheet { padding: 12px; }
+            .tb-validation-top-row { align-items: flex-start; flex-direction: column; }
+            .tb-validation-header-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+            .tb-validation-status { max-width: 100%; }
+            .tb-validation-actions { flex-wrap: wrap; }
+            .tb-validation-subtotal-toolbar { flex-wrap: wrap; white-space: normal; }
+        }
+
+        /* ---------- STANDARD TEMPLATE DOWNLOAD (Section 1, Phase 3) ---------- */
+        /* Escape-hatch link, styled as plain inline text (not a prominent button)
+           since it's a fallback for a rare case, not the primary mapping flow. */
+        .tb-escape-hatch {
+            margin-bottom: 16px;
+        }
+
+        .tb-inline-link-btn {
+            background: none;
+            border: none;
+            padding: 0;
+            color: #2563eb;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: underline;
+            cursor: pointer;
+        }
+
+        .tb-inline-link-btn:hover {
+            color: #1d4ed8;
+        }
+        .tb-validation-controls { max-height: 180px; overflow: auto; padding: 6px 12px; background: #f8fafc; }
+        .tb-validation-controls p { margin: 4px 0; }
+        .tb-total-mapping { background: #f5f8fc; }
+        .tb-total-mapping small { display: block; font-size: 11px; color: #64748b; }
+        .tb-total-choice { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+        .tb-total-choice input[type="number"] { width: 112px; min-width: 0; padding: 7px; border: 1px solid #cbd5e1; border-radius: 5px; }
+        .tb-total-checkbox { display: flex; gap: 5px; align-items: center; white-space: nowrap; font-size: 12px; }
+        #tbTotalRowStatus { font-size: 11px; color: #64748b; }
+        #tbTotalRowError { color: #b91c1c; margin: 6px 0; font-size: 12px; }
+        #tbTotalRowPreview { margin-top: 8px; border-top: 1px solid #dce3ec; padding-top: 8px; }
+        #tbTotalRowPreview summary { color: #205fba; cursor: pointer; font-size: 12px; }
+        .tb-total-amounts { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,130px),1fr)); gap: 12px; padding: 10px 0; }
+        .tb-total-amounts strong { display: block; font-size: 12px; margin-bottom: 4px; }
+        .tb-total-amounts span { display: block; overflow-wrap: anywhere; font-size: 12px; font-variant-numeric: tabular-nums; }
+        .tb-total-mapping [hidden] { display: none !important; }
+        @media (max-width: 650px) { .tb-total-amounts { grid-template-columns: 1fr; } }
+        .tb-validation-controls:empty { display: none; }
+        .tb-validation-table tr.tb-control-heading td { background: #e2e8f0; font-weight: 700; border-top: 2px solid #94a3b8; }
+        .tb-validation-table tr.tb-control-total td { background: #f8fafc; font-weight: 600; }
+        .tb-validation-table tr.tb-control-difference td { border-top: 2px solid #cbd5e1; }
+        .tb-validation-table tr.tb-control-difference td.tb-footing-zero { color: #166534; }
+        .tb-validation-table tr.tb-control-difference td.tb-footing-nonzero { color: #b91c1c; }
+        .tb-validation-table tr.tb-draft-heading td, .tb-review-table tr.tb-draft-heading td { background: #dbeafe; font-weight: 700; border-top: 2px solid #94a3b8; }
+        .tb-validation-table tr.tb-draft-total td, .tb-review-table tr.tb-draft-total td { background: #f8fafc; }
+        .tb-validation-table tr.tb-draft-adjusted_totals td, .tb-review-table tr.tb-draft-adjusted_totals td { font-weight: 700; }
+        .tb-validation-table tr.tb-draft-pairs td, .tb-review-table tr.tb-draft-pairs td { border-top: 2px solid #cbd5e1; font-weight: 700; }
+        .tb-draft-total td.tb-footing-zero { color: #166534; }
+        .tb-draft-total td.tb-footing-nonzero, .tb-validation-table tr.tb-erp-warning td, .tb-review-table tr.tb-erp-warning td { color: #b91c1c; font-weight: 700; }
+        .tb-code-corrections { display:flex; align-items:center; gap:8px; padding:6px 10px; margin:6px 0; background:#fff8e8; border:1px solid #ead7a7; border-radius:6px; font-size:12px; }
+        .tb-code-corrections[hidden] { display:none; }
+        .tb-code-corrections button { padding:5px 9px; }
+        .tb-validation-table tbody tr td.tb-account-code-review { background:#fff3f2; color:#974844; }
+        .tb-code-pending { color:#895c1a; text-decoration:underline dotted; text-underline-offset:3px; }
+        #tbCodeCorrectionsDialog { border:1px solid #cbd5e1; border-radius:12px; padding:22px; max-width:420px; color:#1e293b; box-shadow:0 15px 50px #0f172a33; }
+        #tbCodeCorrectionsDialog::backdrop { background:#0f172a66; }
+        #tbCodeCorrectionsDialog h3 { margin:0 0 8px; }
+        #tbCodeCorrectionsDialog p { margin:0 0 16px; }
+        #tbCodeCorrectionsDialog .tb-code-dialog-actions { display:flex; justify-content:flex-end; gap:8px; }
+        #tbNativeReviewTools { margin: 12px 0; }
+        #tbNativeReviewTools input { min-height: 34px; padding: 6px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; }
+        #tbNativeReviewTools button { margin: 4px; }
+        #tbNativeReviewTools details { margin-top: 10px; }
+        #tbNativeAssignmentValues { overflow-x: auto; margin-top: 8px; background: #fff; border: 1px solid #dce3ec; border-radius: 6px; }
+        #tbNativeAssignmentValues table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        #tbNativeAssignmentValues th, #tbNativeAssignmentValues td { padding: 8px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid #e2e8f0; }
+        #tbNativeAssignmentValues th { background: #f8fafc; }
+    </style>
+    <link rel="stylesheet" href="/static/financial_statement_workspace.css?v=2">
+    <link rel="stylesheet" href="/static/cashflow_workspace.css?v=1">
+    <link rel="stylesheet" href="/static/verification_workspace.css?v=1">
+</head>
+
+<body data-nav-module="Trial Balance" data-nav-parent="index.html">
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <div class="main-container" id="tbPageContainer">
+    <!-- Upload/mapping remains intact while hidden for validation or Available Trial Balances,
+         preserving the selected file, period and mapping when the user returns. -->
+    <div id="uploadViewContainer">
+        <div id="clientSelectionWarning" class="client-warning">
+            <span class="icon">⚠️</span>
+            <span><strong>Please select a client</strong> from the dashboard before uploading a Trial Balance.</span>
+        </div>
+
+        <div class="tb-form-group">
+            <!-- Period Start/End/Type is now the sole date source for an upload -- it supersedes
+                 the old standalone As of Date field. Both dates are required (see
+                 updateClientDependentUI()/uploadTrialBalance() in trial_balance.js): Period End's
+                 value is what actually gets sent to the backend as as_of_date. When both dates are
+                 filled, the page checks with the backend (Phase 5) whether an upload already exists
+                 for this exact period before allowing the upload to proceed. -->
+            <div class="tb-upload-toolbar" id="uploadToolbar">
+                <div class="tb-upload-file-group">
+                    <button class="btn-upload-file" id="uploadFileBtn" type="button">
+                        <span class="upload-file-btn-main">Choose File</span>
+                        <span class="upload-file-btn-sub">.xlsx, .xls</span>
+                    </button>
+                    <div class="file-detail" id="fileInfo" style="display:none;">
+                        <span class="name" id="fileName"></span>
+                        <span class="size" id="fileSize"></span>
+                        <button class="clear" id="clearBtn" title="Remove file" type="button">✕</button>
+                    </div>
+                    <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none;">
+                </div>
+
+                <div class="tb-upload-field">
+                    <label for="periodStartInput">Period Start</label>
+                    <input type="date" id="periodStartInput">
+                </div>
+
+                <div class="tb-upload-field">
+                    <label for="periodEndInput">Period End</label>
+                    <input type="date" id="periodEndInput">
+                </div>
+
+                <div class="tb-upload-field">
+                    <label for="periodTypeSelect">Period Type</label>
+                    <select id="periodTypeSelect">
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                        <option value="half_yearly">Half-Yearly</option>
+                        <option value="annual">Annual</option>
+                    </select>
+                </div>
+
+                <!-- Available Trial Balances (Section 1, Phase 2): opens the selected-upload
+                     browsing view below; kept at the right end of the upload toolbar. -->
+                <button class="btn-secondary-action" id="availableTrialBalancesBtn" type="button">📊 Available Trial Balances</button>
+            </div>
+        </div>
+
+        <!-- Column mapping and a short file preview appear after a file is selected. -->
+        <div class="tb-form-group" id="mappingSection" style="display:none;">
+            <div id="mappingValidationMessage" class="status-bar error" style="display:none;">
+                <span class="icon">⚠️</span>
+                <span id="mappingValidationText"></span>
+            </div>
+
+            <div class="tb-mapping-review-grid">
+                <section class="tb-mapping-pane">
+                    <div class="tb-mapping-heading">
+                        <div>
+                            <h3>🔗 Column Mapping</h3>
+                            <p class="group-hint">Confirm the source column for each Trial Balance field.</p>
+                        </div>
+                        <button class="btn-secondary-action" id="saveTrialBalanceMappingBtn" type="button" disabled>Save Mapping</button>
+                    </div>
+                    <div class="tb-review-table-wrapper">
+                        <table class="tb-review-table">
+                            <thead>
+                                <tr><th>Field</th><th>Excel Column</th><th>Status</th></tr>
+                            </thead>
+                            <tbody id="mappingTableBody"></tbody>
+                            <tfoot class="tb-total-mapping">
+                                <tr>
+                                    <td><label for="tbTotalExcelRow">Row no. of Total</label><small>Required</small></td>
+                                    <td><div class="tb-total-choice">
+                                        <input id="tbTotalExcelRow" type="number" min="2" step="1" required placeholder="Excel row no." aria-describedby="tbTotalRowHelp tbTotalRowError">
+                                        <label class="tb-total-checkbox"><input id="tbNoTotalRow" type="checkbox"> No total row</label>
+                                    </div></td>
+                                    <td id="tbTotalRowStatus">Required</td>
+                                </tr>
+                                <tr><td colspan="3">
+                                    <p id="tbTotalRowHelp" class="group-hint">Use the row number shown in Excel, including the header row.</p>
+                                    <p id="tbTotalRowError" role="alert" hidden></p>
+                                    <details id="tbTotalRowPreview" hidden>
+                                        <summary id="tbTotalRowPreviewLabel">Selected total row</summary>
+                                        <div id="tbTotalRowAmounts" class="tb-total-amounts"></div>
+                                        <p class="group-hint">Used to check leaf totals; excluded from account imports.</p>
+                                    </details>
+                                </td></tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="tb-mapping-pane tb-preview-pane">
+                    <div class="tb-preview-heading">
+                        <div>
+                            <h3>👁️ Client Excel Preview (first 10 rows)</h3>
+                            <p class="group-hint">Shows all source columns for review; only mapped fields are imported.</p>
+                        </div>
+                        <button class="btn-primary-action" id="validateTrialBalanceBtn" type="button" disabled>Validate</button>
+                    </div>
+                    <div class="tb-review-table-wrapper">
+                        <table class="tb-review-table">
+                            <thead id="mappingPreviewHead"></thead>
+                            <tbody id="mappingPreviewBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+            <p class="group-hint tb-escape-hatch">
+                File too irregular to map cleanly?
+                <button type="button" id="downloadStandardTemplateBtn" class="tb-inline-link-btn">Download the standard template</button>
+                instead, then map and validate the re-uploaded file.
+            </p>
+
+        </div>
+
+        <div class="status-bar info" id="statusBar" style="display:none;">
+            <span class="icon" id="statusIcon">ℹ️</span>
+            <span id="statusMessage"></span>
+        </div>
+
+        <div class="tb-form-group" id="summaryContainer" style="display:none;">
+            <h3>✅ Classification Summary</h3>
+            <p class="group-hint">From the stored upload, via the read-only summary endpoint.</p>
+            <div class="tb-summary-tiles">
+                <div class="tb-summary-tile">
+                    <div class="tile-label">Total Accounts</div>
+                    <div class="tile-value" id="summaryTotalCount">0</div>
+                </div>
+                <div class="tb-summary-tile">
+                    <div class="tile-label">Leaf Accounts</div>
+                    <div class="tile-value" id="summaryLeafCount">0</div>
+                </div>
+                <div class="tb-summary-tile">
+                    <div class="tile-label">Parent Accounts</div>
+                    <div class="tile-value" id="summaryParentCount">0</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    <!-- /uploadViewContainer -->
+
+    <div class="tb-validation-sheet" id="tbValidationSheet" aria-hidden="true" hidden>
+        <div class="tb-validation-header" id="tbValidationHeader">
+            <div class="tb-validation-top-row">
+                <div class="tb-validation-title">
+                    <h2>Trial Balance Validation</h2>
+                    <p id="tbValidationFileInfo"></p><p>Double-click codes to correct several rows, then Revalidate once before saving.</p>
+                </div>
+                <div class="tb-validation-header-actions">
+                    <div class="tb-validation-actions">
+                        <button class="btn-secondary-action" id="tbValidationRunBtn" type="button">Revalidate</button>
+                        <button class="btn-primary-action" id="uploadTrialBalanceBtn" type="button" disabled>Save &amp; Classify</button>
+                    </div>
+                    <button class="btn-secondary-action" id="tbValidationBackBtn" type="button">← Back to mapping</button>
+                    <div class="tb-validation-subtotal-toolbar" id="tbSubtotalToolbar" hidden>
+                        <span id="tbSubtotalSummary" role="status"></span>
+                        <button class="btn-secondary-action" id="tbSubtotalToggleBtn" type="button">Show excluded subtotal rows</button>
+                    </div>
+                </div>
+            </div>
+            <div id="tbValidationControls" class="tb-validation-controls" aria-live="polite"></div>
+            <div class="status-bar info tb-validation-status" id="tbValidationStatus" role="status">Run validation to review the complete Trial Balance.</div>
+        </div>
+        <div id="tbUploadProgressBar" class="import-progress-bar tb-validation-progress" style="display:none;">
+            <div class="import-progress-track"><div class="import-progress-fill" id="tbUploadProgressFill"></div></div>
+            <div class="import-progress-label" id="tbUploadProgressLabel">0 of 0 accounts uploaded</div>
+        </div>
+        <div class="tb-validation-sticky-head" id="tbValidationStickyHead" aria-hidden="true"></div>
+        <div class="tb-validation-table-wrap" id="tbValidationTableWrap">
+            <table class="tb-validation-table">
+                <thead id="tbValidationHead"></thead>
+                <tbody id="tbValidationBody"></tbody>
+            </table>
+        </div>
+        <button class="tb-critical-issue-navigator" id="tbCriticalIssueNavigator" type="button"
+                aria-label="No row-level critical issues to navigate" aria-controls="tbValidationBody"
+                title="No row-level critical issues to navigate" disabled>
+            <svg class="tb-critical-issue-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <circle cx="10" cy="10" r="6.5"></circle>
+                <circle cx="10" cy="10" r="2"></circle>
+                <path d="M14.8 14.8 21 21M10 1.5v2M1.5 10h2M10 16.5v2M16.5 10h2"></path>
+            </svg>
+            <span class="tb-critical-issue-count" id="tbCriticalIssueCount" aria-hidden="true">0/0</span>
+        </button>
+    </div>
+
+    <!-- Available Trial Balances supports account-code corrections within one selected upload. -->
+    <div class="tb-form-group" id="availableTrialBalancesSection" style="display:none;">
+        <div class="tb-saved-toolbar">
+            <div class="tb-saved-toolbar-row tb-saved-toolbar-row--source">
+                <h3>📊 Available Trial Balances</h3>
+                <div class="tb-saved-period-field">
+                    <label for="availableUploadsDropdown">Period</label>
+                    <select id="availableUploadsDropdown">
+                        <option value="">— Select an upload —</option>
+                    </select>
+                </div>
+                <div class="tb-saved-workflow-field">
+                    <label for="tbAssignmentWorkflow">Workflow</label>
+                    <select id="tbAssignmentWorkflow" title="Choose the Trial Balance view or an account assignment workflow."><option value="trial_balance">Trial Balance</option><option value="financial">Financial Statements</option><option value="cashflow">Cashflows</option><option value="verification">Verification</option></select>
+                </div>
+                <div class="tb-saved-source-actions">
+                    <button class="btn-secondary-action" id="closeAvailableTrialBalancesBtn" type="button">Upload TB</button>
+                    <!-- Hidden until an upload is selected; removes the selected upload and its accounts. -->
+                    <button class="btn-danger-action" id="deleteUploadBtn" type="button" style="display:none;">🗑️ Delete</button>
+                </div>
+            </div>
+            <div class="tb-saved-toolbar-row tb-saved-toolbar-row--filters">
+                <div class="tb-saved-category-filter">
+                    <label id="tbSavedCategoryLabel" for="tbSavedCategoryTrigger">FS Category</label>
+                    <div class="tb-saved-filter-picker acc2-fs-picker" data-fs-picker data-saved-filter-picker="category">
+                        <button id="tbSavedCategoryTrigger" class="acc2-fs-picker-trigger" data-fs-picker-trigger type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="tbSavedCategoryMenu" aria-label="Filter Trial Balance accounts by Financial Statement category" disabled><span id="tbSavedCategoryTriggerValue" data-saved-filter-trigger-value>Search or choose</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>
+                        <div id="tbSavedCategoryMenu" class="acc2-fs-picker-menu" data-fs-picker-menu data-saved-filter-menu="category" hidden>
+                            <label class="acc2-fs-picker-search-label" for="tbSavedCategorySearch">Find a category</label>
+                            <input id="tbSavedCategorySearch" class="acc2-fs-picker-search" data-fs-picker-search-input data-saved-filter-search="category" type="search" placeholder="Search categories or headings" aria-label="Search categories or headings" autocomplete="off" disabled>
+                            <div class="tb-saved-filter-actions"><span data-saved-filter-summary aria-live="polite">Check exact matches</span><button class="tb-saved-filter-clear" data-saved-filter-clear="category" type="button" hidden>Clear selection</button></div>
+                            <div id="tbSavedCategoryOptions" class="acc2-fs-picker-option-wrap tb-saved-filter-options" role="listbox" aria-label="Financial Statement categories" aria-multiselectable="true"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="tb-saved-note-filter">
+                    <label for="tbSavedNoteTrigger">Note</label>
+                    <div class="tb-saved-filter-picker acc2-fs-picker" data-fs-picker data-saved-filter-picker="note">
+                        <button id="tbSavedNoteTrigger" class="acc2-fs-picker-trigger" data-fs-picker-trigger type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="tbSavedNoteMenu" aria-label="Filter Trial Balance accounts by Note" disabled><span id="tbSavedNoteTriggerValue" data-saved-filter-trigger-value>Search or choose</span><span class="acc2-fs-picker-chevron" aria-hidden="true">▾</span></button>
+                        <div id="tbSavedNoteMenu" class="acc2-fs-picker-menu" data-fs-picker-menu data-saved-filter-menu="note" hidden>
+                            <label class="acc2-fs-picker-search-label" for="tbSavedNoteSearch">Find a note</label>
+                            <input id="tbSavedNoteSearch" class="acc2-fs-picker-search" data-fs-picker-search-input data-saved-filter-search="note" type="search" placeholder="Search notes" aria-label="Search notes" autocomplete="off" disabled>
+                            <div class="tb-saved-filter-actions"><span data-saved-filter-summary aria-live="polite">Check exact matches</span><button class="tb-saved-filter-clear" data-saved-filter-clear="note" type="button" hidden>Clear selection</button></div>
+                            <div id="tbSavedNoteOptions" class="acc2-fs-picker-option-wrap tb-saved-filter-options" role="listbox" aria-label="Financial Statement notes" aria-multiselectable="true"></div>
+                        </div>
+                    </div>
+                </div>
+                <button class="btn-secondary-action" id="tbAssignCategoriesBtn" type="button">Assignments →</button>
+            </div>
+        </div>
+
+        <button id="tbNextUnassigned" type="button" aria-label="Next unassigned category or note" title="Next unassigned" aria-describedby="tbNextUnassignedCount" hidden disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v10m-4-4 4 4 4-4"/></svg>
+            <span id="tbNextUnassignedCount" aria-hidden="true" hidden></span>
+        </button>
+        <button id="tbAssignmentSetup" type="button" aria-label="Open assignment setup" title="Assignment setup" aria-haspopup="true" aria-controls="tbAssignmentSetupMenu" aria-expanded="false" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m9 3-.7 2.4-2.2 1L3.8 6l-1.5 2.6L4 10.5v3l-1.7 1.9L3.8 18l2.3-.4 2.2 1L9 21h3l.7-2.4 2.2-1 2.3.4 1.5-2.6-1.7-1.9v-3l1.7-1.9L17.2 6l-2.3.4-2.2-1L12 3Z"/><circle cx="10.5" cy="12" r="3"/></svg>
+        </button>
+        <nav id="tbAssignmentSetupMenu" aria-label="Assignment setup" hidden></nav>
+        <p class="group-hint" id="availableUploadsEmptyHint" style="display:none;">No classified Trial Balance uploads found for this client yet.</p>
+        <div id="tbNativeReviewTools" hidden>
+            <label for="tbNativeSearch">Search all accounts</label>
+            <input id="tbNativeSearch" type="search" maxlength="200" placeholder="Account code or name">
+            <button id="tbNativeFind" class="btn-secondary-action" type="button">Search</button>
+            <button id="tbNativeRefresh" class="btn-secondary-action" type="button">Refresh review</button>
+            <button id="tbNativePrevious" class="btn-secondary-action" type="button">Previous</button>
+            <span id="tbNativePage" role="status"></span>
+            <button id="tbNativeNext" class="btn-secondary-action" type="button">Next</button>
+            <button id="tbNativeRecover" class="btn-secondary-action" type="button" hidden>Check saved result</button>
+            <button id="tbNativeRetry" class="btn-secondary-action" type="button" hidden>Retry same save</button>
+            <p id="tbNativeReviewNotice" class="group-hint" role="status">Footings cover the entire Trial Balance, including accounts on other pages.</p>
+            <details><summary>Saved assignments (read only)</summary><div id="tbNativeAssignmentValues"></div></details>
+        </div>
+        <p id="tbSavedCategoryNoMatches" role="status" aria-live="polite" hidden>No Trial Balance accounts match these filters.</p>
+
+        <div id="tbCodeCorrectionsBar" class="tb-code-corrections" role="status" hidden>
+            <span id="tbCodeCorrectionsCount"></span>
+            <button id="tbSaveCodeCorrections" class="btn-primary-action" type="button">Save corrections</button>
+            <button id="tbDiscardCodeCorrections" class="btn-secondary-action" type="button">Discard</button>
+        </div>
+        <div id="tbSavedStatus" class="status-bar" role="status" style="display:none;"></div>
+        <div id="tbSavedValidationControls" class="tb-validation-controls" aria-live="polite"></div>
+        <div id="tbSavedStickyHead" class="tb-saved-sticky" hidden aria-hidden="true"></div>
+        <div class="tb-review-table-wrapper" id="availableAccountsTableWrapper" style="display:none;">
+            <table class="tb-review-table tb-saved-table">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Name</th>
+                        <th>Classification</th>
+                        <th>FS Category</th>
+                        <th>Note</th>
+                        <th class="tb-amount-cell">Opening Dr</th>
+                        <th class="tb-amount-cell">Opening Cr</th>
+                        <th class="tb-amount-cell">Period Dr</th>
+                        <th class="tb-amount-cell">Period Cr</th>
+                        <th class="tb-amount-cell">Closing Dr</th>
+                        <th class="tb-amount-cell">Closing Cr</th>
+                    </tr>
+                </thead>
+                <tbody id="availableAccountsTableBody">
+                    <!-- Populated by renderAvailableAccountsTable() in trial_balance.js -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/utils.js"></script>
+    <script src="/static/account_assignment_shared.js?v=3"></script>
+    <script src="/static/financial_statement_workspace.js?v=5"></script>
+    <dialog id="tbCodeCorrectionsDialog" aria-labelledby="tbCodeCorrectionsTitle">
+        <h3 id="tbCodeCorrectionsTitle">Unsaved account codes</h3>
+        <p>Save your corrections before continuing?</p>
+        <div class="tb-code-dialog-actions">
+            <button id="tbCodeStay" class="btn-secondary-action" type="button">Stay</button>
+            <button id="tbCodeDiscard" class="btn-secondary-action" type="button">Discard</button>
+            <button id="tbCodeSave" class="btn-primary-action" type="button">Save corrections</button>
+        </div>
+    </dialog>
+    <div id="tbToastRegion" class="tb-toast-region" aria-live="polite" aria-relevant="additions text"></div>
+    <script src="/static/cashflow_workspace.js?v=2"></script>
+    <script src="/static/verification_workspace.js?v=2"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/trial_balance.js?v=57"></script>
+
+</body>
+
+</html>

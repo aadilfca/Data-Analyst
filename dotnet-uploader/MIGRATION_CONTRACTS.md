@@ -7,7 +7,7 @@ Version 3: P07A–P07C precede P08 to address tenant and audit-firm collaboratio
 - **Existing:** behavior observed in source or required by the project guide; verify it with isolated fixtures before replacing an endpoint.
 - **Target:** proposed implementation contract for review; implementation still follows each phase's file/approach gates.
 - **Decided:** Aadil selected a 500 MB Free-plan database ceiling on 2026-11-10. This supersedes the earlier 400 MB ceiling for migration planning; see section 4.
-- Move all backend behavior, financial calculations, reports, workbooks and jobs to .NET; retain existing HTML/CSS/JavaScript. Python remains the legacy comparison/rollback application until replacements are accepted; no separate Python report service is planned.
+- Move all backend behavior, active frontend pages/assets, calculations, reports, workbooks and jobs to .NET. Maintain C# frontend copies in `dotnet-uploader/frontend`; the C# host/package never uses root `static/` or Python. Google Drive is excluded. Keep Python unchanged through pre-removal Phase 7A/7B; remove it only after Aadil accepts both checks, then complete Phase 7C.
 - Preserve P01 as a historical snapshot. This contract supersedes its ownership proposals and pending-policy notes without rewriting captured source or changing the existing Python patch. P01–P05C implementation remains reusable.
 
 ## 2. Public API and access
@@ -108,9 +108,10 @@ This list records discussion, not blanket authorization to activate policies. Re
 
 ### P10 isolated application shell
 
-- Shell hosting defaults off and requires authentication/user/client settings. Package existing flat HTML/JS/CSS assets; expose no repository, upload, workbook or backup directory. Recheck session, selected tenant/role and applicable client selection before protected HTML; retain public login/info and allowlisted retired-ACC bookmark redirects.
+- Shell hosting defaults off and requires authentication/user/client settings. Phase 3 owns independent C# copies of every active page and required asset in `dotnet-uploader/frontend`; package and serve only those files, with no root `static/` fallback. Expose no repository, upload, workbook or backup directory. Recheck session, selected tenant/role and applicable client selection before protected HTML; retain public login/info and allowlisted retired-ACC bookmark redirects.
 - Candidate SQL adds nullable selected tenant and a session context revision; it seeds no tenant/membership and runs only in owned fixtures. Explicit workspace choice verifies active membership, clears client selection, increments revision and writes its audit atomically. Concurrent stale choices cannot both apply.
 - P08/P09 recheck selected tenant and revision inside their transactions. Their shell requests require X-App-Context, a session fingerprint/revision assertion rather than a tenant selector or credential; reject absent/stale assertions, including route case/slash variants. Every later tenant-bound operation needs equivalent checks before activation.
+- Phase 3A inventories every page/resource/API call; 3B creates the C# copies; 3C removes root-static serving/package inputs and marks incomplete pages unavailable; 3D verifies routes and package contents. No Google Drive UI, API or asset is included.
 - The .NET-only external bootstrap runs before retained scripts, clearing application sessionStorage/history and obsolete selected-client localStorage keys on session/workspace change. Cross-tab notifications, visibility/focus and restored-page checks invalidate stale documents; browser state grants no access. It adds workspace selection to NAV_MANIFEST and a visible switch link without modifying Python assets.
 - Client-card intents remain allowlisted; shared-data access and later-module APIs stay unavailable. Schema/mapping/backup/execution, full parity and cross-backend enforcement retain separate activation gates. Shell/browser rehearsal is not deployment acceptance; remaining modules keep their planned phases.
 
@@ -457,7 +458,7 @@ Proposed job states are queued, preparing_inputs, running, succeeded, failed, ca
 | P46–P52 | Development ports session lifecycle, lookup/check routes, atomic review/status, tenant-native evidence, Forms/Physical Bills, Cross-checks, Audit Workbook, print and both exports. Candidate migration `0022` remains unapplied; routes stay disabled pending P57–P63 database acceptance and deployment. |
 | P57, P59–P63 | P57 backend accepted; Drive removed. P59/P60 stay default-off; local backup/tray system checks remain. P61 is limited to database/configuration, reviewed schema state, startup/tray, recovery and rollback. Defer Verification and upload/preview feature acceptance to Aadil's manual P62 staging review; keep unaccepted modules off. P62 rehearsal and P63 production cutover remain separate. P63 also requires cross-device recovery and provider baseline. See AGENTS.md and POSTGRES_SCHEMA_OWNERSHIP.md. |
 
-IDs remain stable; execution is P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 → P41–P52 → P57 → P59–P63. The C# host no longer forwards requests to Python; keep Python as a separate rollback application until P63 acceptance. Unported native routes remain unavailable until replacements pass acceptance. Never introduce an unapproved Python helper service.
+IDs remain stable; execution is P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 → P41–P52 → P57 → P59–P63. The C# host never forwards to or invokes Python and serves only its own frontend copies. Keep the Python app unchanged and separate through the final data-fetch speed comparison; decide retirement afterward. Unported native routes remain unavailable until replacements pass acceptance. Never introduce an unapproved Python helper service.
 
 Each operation/scope has one active writer. Shadow comparisons use isolated data, not duplicate production imports. Keep shared schemas backward-compatible; reconcile uncertain commits before routing back, never fail over by replaying a write. Rollback never deletes history, drops required columns or overwrites newer unrelated work. Destructive retirement needs protected backups and explicit acceptance/authorization.
 
@@ -486,6 +487,22 @@ P03 establishes the isolated .NET harness; each port phase adds relevant fixture
 - Aadil approved this ownership/sequence revision; completed implementation remains accepted. Subsequent implementation, local acceptance and Git steps retain their separate approvals.
 - Deployed schema/provider metering remain unverified; local P04 tests do not certify them. Per-route fixtures, authorization, hash vectors, numeric bounds, golden outputs and legacy reachability remain phase work.
 - Review C# report ownership, execution order, prerequisite guards, API/value preservation and capacity policy. No local-server test is needed for this documentation revision; implementation phases require their own checks and acceptance.
+
+## 10. Python-independence completion phases
+
+Phases 1–2 and 3A–3C are complete; Phase 3D route/package checks were verified on 2026-11-23. Pending work is:
+
+| Phase | Work and acceptance gate |
+|---|---|
+| 4 — Setup and packaging | Complete a clean C# install and launch; identify required non-Python items such as PostgreSQL and protected configuration. |
+| 5 — Required tools and migrations | Audit Python-only utilities and prepare .NET/SQL replacements; defer deleting any Python source or launcher until Phase 6. |
+| 7A — Clean-copy proof | Before Python removal, run a clean `dotnet-uploader` copy with Python folders, interpreter and launchers unavailable; record any required non-Python configuration. |
+| 7B — Speed comparison | Compare C# and Python fetching the same data under matching conditions, verify comparable results and record timings. Leave Python unchanged until Aadil accepts this comparison. |
+| 6 — Python removal | After Phases 7A/7B pass and Aadil accepts them, remove Python source, dependencies, launchers and obsolete assets from the product source/package. |
+| 7C — Final independence audit | After Phase 6, scan source/package for Python dependencies and confirm a clean C# build and launch. |
+| 8 — Section-by-section review | After the independence gate, Aadil reviews one C# section at a time; keep unfinished sections unavailable. |
+
+Revised execution order: 4 → 5 → 7A → 7B → 6 → 7C → 8. The Phase 3B/3C combined commit remains a separate closeout after Aadil's local acceptance and the approved commit message.
 
 ## P57 Dashboard and error administration
 

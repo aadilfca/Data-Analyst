@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Audit Rules - Internal Audit App</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+</head>
+
+<body data-nav-module="Audit Rules" data-nav-parent="index.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <!-- Populated by renderNavLeft() in client_context.js: back arrow + 🏢 home link + brand text. -->
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <div class="main-container">
+
+        <!-- Shared Processing UI: Supabase reads can take several seconds on a free-tier wake-up.
+             This remains non-blocking so the selected rail is visible while its data arrives. -->
+        <div id="arProcessingStatus" class="ar-processing-status" role="status" aria-live="polite"
+            aria-atomic="true" hidden>
+            <div id="arProcessingProgress" class="ar-processing-progress" aria-hidden="true"></div>
+            <span id="arProcessingMessage">Loading Audit Rules…</span>
+        </div>
+
+        <!-- Three-pane shell: entity rail | list panel | detail panel. Wrapped in an id
+             (arShellContainer) so the Assign Categories full-page view below can hide it
+             entirely while open, same whole-flow-swap pattern trial_balance.js already
+             uses for its Available Trial Balances view. -->
+        <div class="audit-rules-shell" id="arShellContainer">
+
+            <!-- LEFT RAIL: accordion entity navigation. The current entity's list is moved into
+                 its matching slot by audit_rules.js, leaving this shell as rail + detail only. -->
+            <div class="ar-rail">
+                <div class="ar-rail-section" data-rail-section="documents">
+                    <button type="button" id="arRailDocuments" class="ar-rail-item active" aria-expanded="true" aria-controls="arDocumentsRailListSlot">
+                        <span class="ar-rail-icon">📄</span><span class="ar-rail-label">Documents</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arDocumentsRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="cross-checks">
+                    <button type="button" id="arRailCrossChecks" class="ar-rail-item" aria-expanded="false" aria-controls="arCrossChecksRailListSlot">
+                        <span class="ar-rail-icon">🔗</span><span class="ar-rail-label">Cross-checks</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arCrossChecksRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="categories">
+                    <button type="button" id="arRailCategories" class="ar-rail-item" aria-expanded="false" aria-controls="arCategoriesRailListSlot">
+                        <span class="ar-rail-icon">🗂️</span><span class="ar-rail-label">Categories</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arCategoriesRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="voucher-checks">
+                    <button type="button" id="arRailVoucherChecks" class="ar-rail-item" aria-expanded="false" aria-controls="arVoucherChecksRailListSlot">
+                        <span class="ar-rail-icon">✅</span><span class="ar-rail-label">Voucher-level Checks</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arVoucherChecksRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+                <div class="ar-rail-section" data-rail-section="assertions">
+                    <button type="button" id="arRailAssertions" class="ar-rail-item" aria-expanded="false" aria-controls="arAssertionsRailListSlot">
+                        <span class="ar-rail-icon">🎯</span><span class="ar-rail-label">Assertions</span><span class="ar-rail-chevron" aria-hidden="true">›</span>
+                    </button>
+                    <div id="arAssertionsRailListSlot" class="ar-rail-list-slot"></div>
+                </div>
+            </div>
+
+            <!-- Entity lists are declared here for stable ids and moved into their rail slots at
+                 startup. The detail panels below remain direct shell children. -->
+
+            <!-- Documents list section (Phase 5, unchanged — only newly wrapped in this div
+                 so it can be shown/hidden alongside the Cross-checks section below). -->
+            <div id="arDocumentsListSection" class="ar-list-panel">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Documents</span>
+                    <button type="button" id="arAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <div id="arListBody" class="ar-list-body"></div>
+                <div id="arListEmptyMessage" class="ar-list-empty" style="display:none;">No documents found.</div>
+                <button type="button" id="arLoadMoreBtn" class="ar-btn-chip-add ar-btn-load-more" style="display:none;">Load more</button>
+            </div>
+
+            <!-- Cross-checks list section (Phase 6, new). -->
+            <div id="arCrossChecksListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Cross-checks</span>
+                    <button type="button" id="arCrossCheckAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arCrossCheckShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <div id="arCrossCheckListBody" class="ar-list-body"></div>
+                <div id="arCrossCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No cross-checks
+                    found.</div>
+                <button type="button" id="arCrossCheckLoadMoreBtn" class="ar-btn-chip-add ar-btn-load-more" style="display:none;">Load more</button>
+            </div>
+
+            <!-- Categories list section (Phase 7, new). -->
+            <div id="arCategoriesListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Categories</span>
+                    <button type="button" id="arCategoryAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <!-- Secondary controls row: keeps the "Assign Categories" navigation action and
+                     the "Show inactive" filter visually separate from the title/+ Add New header
+                     above, instead of all three competing in one space-between row. -->
+                <div class="ar-category-list-toolbar">
+                    <!-- Assign Categories (Section 2, Phase 5): opens the full-page TB
+                         account-assignment view below. -->
+                    <button type="button" id="arAssignCategoriesBtn" class="ar-btn-assign-categories">Assign
+                        Categories</button>
+                    <label class="ar-show-inactive-toggle">
+                        <input type="checkbox" id="arCategoryShowInactiveCheckbox">
+                        <span>Show inactive</span>
+                    </label>
+                </div>
+                <div id="arCategoryListBody" class="ar-list-body"></div>
+                <div id="arCategoryListEmptyMessage" class="ar-list-empty" style="display:none;">No categories found.
+                </div>
+                <button type="button" id="arCategoryLoadMoreBtn" class="ar-btn-chip-add ar-btn-load-more" style="display:none;">Load more</button>
+            </div>
+
+            <!-- Voucher-level Checks list section (Generic Voucher-Level Checks, Phase 3 of 6, new).
+                 Ordered by sort_order (server-assigned), NOT alphabetical -- unlike
+                 Documents/Cross-checks/Categories. Drag-to-reorder via Sortable.js persists live
+                 on drop (POST .../reorder), since there is no parent-form save step for this list
+                 -- see arVoucherCheckSortable in audit_rules.js. -->
+            <div id="arVoucherChecksListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Voucher-level Checks</span>
+                    <button type="button" id="arVoucherCheckAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arVoucherCheckShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <!-- Reorder is disabled while "Show inactive" is checked -- see
+                     loadVoucherChecks()/arVoucherCheckShowInactiveCheckbox listener in
+                     audit_rules.js for why (sending a reorder payload built from a
+                     filtered/partial list would corrupt sort_order for any items hidden from
+                     view). -->
+                <div id="arVoucherCheckReorderHint" class="ar-list-empty"
+                    style="display:none; padding:4px 12px; font-size:12px;">
+                    Drag-to-reorder is disabled while inactive items are shown.
+                </div>
+                <div id="arVoucherCheckListBody" class="ar-list-body"></div>
+                <div id="arVoucherCheckListEmptyMessage" class="ar-list-empty" style="display:none;">No
+                    voucher-level checks found.</div>
+            </div>
+
+            <!-- Assertions list section (Assertions Phase 1 of 5, new). Fixed master list, ordered
+                 by sort_order (the conventional audit-standard order) -- same ordering rule as
+                 Voucher-level Checks above, but no drag-to-reorder here (order is fixed at seed). -->
+            <div id="arAssertionsListSection" class="ar-list-panel" style="display:none;">
+                <div class="ar-list-panel-header">
+                    <span class="ar-list-panel-title">Assertions</span>
+                    <button type="button" id="arAssertionAddNewBtn" class="ar-btn-add-new">+ Add New</button>
+                </div>
+                <label class="ar-show-inactive-toggle">
+                    <input type="checkbox" id="arAssertionShowInactiveCheckbox">
+                    <span>Show inactive</span>
+                </label>
+                <div id="arAssertionListBody" class="ar-list-body"></div>
+                <div id="arAssertionListEmptyMessage" class="ar-list-empty" style="display:none;">No assertions
+                    found.</div>
+            </div>
+
+            <!-- RIGHT: detail / edit panel. Same one-section-per-entity-type toggle pattern
+                 as the list panel above. -->
+
+            <!-- Documents detail section (Phase 5, unchanged — only newly wrapped in this div). -->
+            <div id="arDocumentsDetailSection" class="ar-detail-panel">
+                <div id="arDetailEmpty" class="ar-detail-empty">
+                    <p>Select a document from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arNameInput">Name</label>
+                        <input type="text" id="arNameInput" required>
+                    </div>
+
+                    <!-- Physical Bill evidence type (Phase 4 of 8): how this Document's evidence
+                         is satisfied. Placed directly after Name because it governs what the rest
+                         of this form shows — a Physical Bill hides the Template field entirely
+                         (see updateDocumentTypeVisibility() in audit_rules.js).
+                         Forced choice, no pre-selection: the placeholder is disabled+selected so a
+                         new Document can't be saved until a type is picked. -->
+                    <div class="ar-field">
+                        <label for="arDocumentTypeSelect">Document Type</label>
+                        <select id="arDocumentTypeSelect">
+                            <option value="" disabled selected>-- Select a document type --</option>
+                            <option value="linked_template">Linked Template</option>
+                            <option value="form">Form (manual / linked)</option>
+                            <option value="physical_bill" id="arLegacyPhysicalBillOption">Legacy Physical Bill (migration required)</option>
+                        </select>
+                        <div id="arDocumentTypeHint" class="ar-field-warning"
+                            style="display:none; color:#64748b;">
+                            A Physical Bill's fields (Bill No, Date, Amount, Vendor name) are fixed by
+                            type — there's no template to link and no field list to configure.
+                        </div>
+                    </div>
+
+                    <input type="hidden" id="arKbNoteInput" value="">
+
+                    <!-- Phase 9: which Data Bank template this Document's supporting evidence
+                         is searched in (drives the Supporting column's search modal). Hidden for a
+                         Physical Bill (Phase 4 of 8). -->
+                    <div class="ar-field" id="arDocTemplateField">
+                        <label for="arTemplateSelect" id="arDocTemplateLabel">Template (for Supporting search)</label>
+                        <select id="arTemplateSelect">
+                            <option value="">-- None --</option>
+                        </select>
+                    </div>
+
+                    <div class="ar-field ar-form-fields-field" id="arFormFieldsField" style="display:none;">
+                        <div class="ar-verification-fields-heading">
+                            <label>Form Fields</label>
+                            <span class="ar-policy-badge">Manual evidence</span>
+                        </div>
+                        <p class="ar-form-fields-help">Define the fields auditors will complete in Verification. A Linked Column is optional and is used only by “Copy from lines”. Arithmetic — Multiply uses exactly two Numeric Item-row fields.</p>
+                        <div class="ar-form-fields-table-wrap">
+                            <table class="ar-form-fields-table">
+                                <thead><tr><th>Column Name</th><th>Column Type</th><th>Multiply columns</th><th>Scope</th><th>Linked Column</th><th></th></tr></thead>
+                                <tbody id="arFormFieldsBody"></tbody>
+                            </table>
+                        </div>
+                        <button type="button" id="arFormAddFieldBtn" class="ar-btn-chip-add">+ Add field</button>
+                        <div id="arFormFieldsHint" class="ar-field-warning"></div>
+                    </div>
+
+                    <input type="hidden" id="arRiskRatingSelect" value="">
+
+                    <!-- Phase 2: controlled Data Bank projection for Verification. Core fields
+                         are fixed transaction fields; optional fields are selected from this
+                         Template and assigned a risk level. -->
+                    <div class="ar-field ar-verification-fields-field" id="arVerificationFieldsField">
+                        <div class="ar-verification-fields-heading">
+                            <label>Verification Data Fields</label>
+                            <span class="ar-policy-badge">Template-scoped</span>
+                        </div>
+                        <div class="ar-verification-fields-panel">
+                            <div id="arVerificationPolicyStatus" class="ar-verification-policy-status"></div>
+                            <div id="arVerificationCoreFields" class="ar-verification-core-list"></div>
+                            <div id="arVerificationOptionalFields" class="ar-verification-optional-list"></div>
+                            <div class="ar-verification-add-row">
+                                <select id="arVerificationOptionalSelect" aria-label="Additional verification field">
+                                    <option value="">-- Add a mapped column --</option>
+                                </select>
+                                <select id="arVerificationOptionalRisk" aria-label="Add a Template column"></select>
+                                <button type="button" id="arVerificationOptionalAddBtn" class="ar-btn-chip-add">Add field</button>
+                            </div>
+                            <div id="arVerificationPolicyHint" class="ar-field-warning"></div>
+                        </div>
+                    </div>
+
+                    <!-- Authorisation section: Authorisation Roles immediately followed by
+                         Signature Specimens (the people-list for those roles), grouped together
+                         and visually separated from Identity/Setup above
+                         (confirmed fix — pure reorder + labelling, no field/logic changes). -->
+                    <div class="ar-detail-section-title">Authorisation</div>
+
+                    <div class="ar-field">
+                        <label>Audit checks and signatories</label>
+                        <div class="ar-authorisation-table-wrap"><table class="ar-authorisation-table"><thead><tr><th>Audit check</th><th>Signatories / authority</th><th>Action</th></tr></thead><tbody id="arAuthorisationTableBody"></tbody></table></div>
+                        <div id="arAuthorisationSaveHint" class="ar-field-warning ar-save-first-hint">Save the document first to manage signatories.</div>
+                        <div id="arRolesChipList" style="display:none"></div><input id="arRolesInput" type="hidden"><button id="arRolesAddBtn" type="button" style="display:none"></button>
+                    </div>
+
+                    <!-- Signature Specimens (Soft-delete conversion, Phase 4 of 4, FINAL): moved
+                         in from the old standalone rail entity. Per-Role list of persons with an
+                         active/inactive toggle, scoped to this Document — see
+                         renderDocumentSignatureSpecimensSection() in audit_rules.js. Hidden (hint
+                         shown instead) until the Document is actually saved, since a specimen row
+                         needs a real document_id. -->
+                    <div class="ar-field" style="display:none">
+                        <label>Signature Specimens</label>
+                        <div id="arDocSignatureSpecimensHint" class="ar-field-warning" style="display:none;">
+                            Save the document first to manage signature specimens.</div>
+                        <div id="arDocSignatureSpecimensContainer"></div>
+                    </div>
+
+                    <!-- The old "Cross-check-eligible Fields" mirror was removed (Cross-Check Matrix
+                         Redesign, Phase 3 of 5): a cross-check's column choices are now made in the
+                         Cross-Check tab, sourced per-document from its linked template. -->
+
+                    <div class="ar-field" id="arUsedByRow" style="display:none;">
+                        <span class="ar-used-by-label">Used by <span id="arUsedByCount">0</span> categories</span>
+                    </div>
+
+                    <div id="arDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Cross-checks detail section (Phase 6, new). -->
+            <div id="arCrossChecksDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arCrossCheckDetailEmpty" class="ar-detail-empty">
+                    <p>Select a cross-check from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arCrossCheckDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arCrossCheckEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arCrossCheckNameInput">Name</label>
+                        <input type="text" id="arCrossCheckNameInput" required>
+                    </div>
+
+                    <!-- Comparison matrix (Cross-Check Matrix Redesign, Phase 5 of 5): documents
+                         are columns, field rows have no label (positional), each cell picks a
+                         column name from that document's linked template. Built by renderMatrix()
+                         in audit_rules.js. Every edit persists immediately via the matrix
+                         endpoints; a brand-new Cross-check must be saved first (name + comparison
+                         type) before the matrix is editable — hence arMatrixNeedsSaveHint. -->
+                    <div class="ar-field" id="arMatrixField">
+                        <label>Comparison matrix</label>
+                        <div id="arMatrixNeedsSaveHint" class="ar-field-warning" style="display:none;">
+                            Save this cross-check (name + comparison type) before building its matrix.</div>
+                        <div class="ar-add-doc-row">
+                            <select id="arMatrixAddColumnSelect"></select>
+                            <button type="button" id="arMatrixAddColumnBtn" class="ar-btn-chip-add">Add document</button>
+                        </div>
+                        <div id="arMatrixTableWrap" class="ar-matrix-wrap">
+                            <table id="arMatrixTable" class="ar-matrix-table"></table>
+                        </div>
+                        <button type="button" id="arMatrixAddRowBtn" class="ar-btn-chip-add">+ Add field row</button>
+                        <div id="arMatrixWarnings"></div>
+                    </div>
+
+                    <div class="ar-field" id="arLegacyComparisonTypeField" style="display:none;">
+                        <label for="arComparisonTypeSelect">Comparison Type</label>
+                        <select id="arComparisonTypeSelect">
+                            <option value="" disabled selected>Select a comparison type</option>
+                            <option value="All equal">All equal</option>
+                            <option value="Sequential increasing">Sequential increasing</option>
+                            <option value="Sequential decreasing">Sequential decreasing</option>
+                            <option value="Within tolerance %">Within tolerance %</option>
+                            <option value="Must be equal">Must be equal</option>
+                            <option value="May be less, never more">May be less, never more</option>
+                        </select>
+                    </div>
+
+                    <!-- Automated cross-document validation engine, Phase 5 of 10: also compare
+                         the anchor document against the voucher line's own amount. The anchor is
+                         resolved live at evaluation time (Phase 6), never picked here — this is
+                         just the on/off flag plus a static explanatory hint. -->
+                    <div class="ar-field">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <input type="checkbox" id="arCompareToVoucherLineCheckbox">
+                            <span>Also compare to voucher line amount</span>
+                        </label>
+                        <div id="arCompareToVoucherLineHint" class="ar-field-warning" style="display:none; color:#64748b;"></div>
+                    </div>
+
+                    <div class="ar-field" id="arCrossCheckUsedByRow" style="display:none;">
+                        <span class="ar-used-by-label">Used by <span id="arCrossCheckUsedByCount">0</span>
+                            categories</span>
+                    </div>
+
+                    <div id="arCrossCheckDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arCrossCheckSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arCrossCheckDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arCrossCheckRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Categories detail section (Phase 7, new). -->
+            <div id="arCategoriesDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arCategoryDetailEmpty" class="ar-detail-empty">
+                    <p>Select a category from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arCategoryDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arCategoryEditingId" value="">
+
+                    <!-- Coverage gap warning (Assertions Phase 5 of 5, FINAL, new). Populated by
+                         renderCategoryAssertionGaps() in audit_rules.js - one line per Assertion
+                         that's in use somewhere in the app but has zero coverage for this
+                         Category. Hidden entirely when there are no gaps. -->
+                    <div id="arCategoryAssertionGapsWarning" class="ar-category-gap-warning" style="display:none;"></div>
+
+                    <div class="ar-field">
+                        <label for="arCategoryNameInput">Name</label>
+                        <input type="text" id="arCategoryNameInput" required>
+                    </div>
+
+                    <div class="ar-field">
+                        <label for="arCategoryKbOverviewInput">KB Overview</label>
+                        <textarea id="arCategoryKbOverviewInput" rows="3"></textarea>
+                    </div>
+
+                    <div class="ar-field" id="arCategoryDocumentsField">
+                        <label>Applicable Documents</label>
+                        <div id="arCategoryDocsList" class="ar-category-docs-list"></div>
+                        <div class="ar-add-doc-row">
+                            <select id="arCategoryAddDocumentSelect"></select>
+                            <button type="button" id="arCategoryAddDocumentBtn" class="ar-btn-chip-add">Add document</button>
+                        </div>
+                        <div class="ar-field-help">Only these documents can appear in this Category's Procedure/Evidence and Verification configuration.</div>
+                    </div>
+
+                    <!-- Read-only metadata strip: matrix version + usage count sit together on
+                         their own muted line, separate from the action buttons in the footer
+                         below (they are facts about the category, not things you can act on). -->
+                    <div class="ar-category-detail-meta">
+                        <div id="arCategoryMatrixVersionRow">
+                            <span class="ar-used-by-label">Matrix version: <span
+                                    id="arCategoryMatrixVersion">1</span></span>
+                        </div>
+
+                        <div id="arCategoryUsedByRow" style="display:none;">
+                            <span class="ar-used-by-label">Used by <span id="arCategoryUsedByCount">0</span>
+                                vouchers</span>
+                        </div>
+                    </div>
+
+                    <!-- Sticky footer: Save/Delete/Restore stay pinned to the bottom of the
+                         (scrolling) detail panel so they're reachable without scrolling past the
+                         Validation Rules box. Scoped via .ar-category-detail-footer so the other
+                         three detail panels keep their existing inline action row. -->
+                    <div class="ar-category-detail-footer">
+                        <div id="arCategoryDetailStatus" class="upload-status" style="display:none;"></div>
+
+                        <div class="ar-detail-actions">
+                            <button type="button" id="arCategorySaveBtn" class="ar-btn-save">Save</button>
+                            <button type="button" id="arCategoryDeleteBtn" class="ar-btn-delete"
+                                style="display:none;">Delete</button>
+                            <button type="button" id="arCategoryRestoreBtn" class="ar-btn-restore"
+                                style="display:none;">Restore</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Voucher-level Checks detail section (Generic Voucher-Level Checks, Phase 3 of 6, new).
+                 Soft-delete/restore like Documents (not hard-delete like Signature Specimens).
+                 is_active is Delete/Restore-button-driven only, same convention as every other
+                 soft-delete entity here -- no separate checkbox. -->
+            <div id="arVoucherChecksDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arVoucherCheckDetailEmpty" class="ar-detail-empty">
+                    <p>Select a voucher-level check from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arVoucherCheckDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arVoucherCheckEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arVoucherCheckNameInput">Name</label>
+                        <input type="text" id="arVoucherCheckNameInput" required>
+                    </div>
+
+                    <div class="ar-field">
+                        <label for="arVoucherCheckAuthorityInput">Authority / Designation</label>
+                        <input type="text" id="arVoucherCheckAuthorityInput">
+                    </div>
+
+                    <!-- Assertion tags (Assertions Phase 4 of 5, new). Entity-scoped (no Category
+                         pairing for Voucher-level Checks, per Phase 3's architectural fork) -
+                         rendered/populated entirely by audit_rules.js's renderAssertionTagPicker(). -->
+                    <div class="ar-field" id="arVoucherCheckAssertionsField">
+                        <label id="arVoucherCheckAssertionsLabel">Assertions</label>
+                        <div id="arVoucherCheckAssertionsPicker" class="ar-chip-list"></div>
+                    </div>
+
+                    <div id="arVoucherCheckDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arVoucherCheckSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arVoucherCheckDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arVoucherCheckRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Assertions detail section (Assertions Phase 1 of 5, new). -->
+            <div id="arAssertionsDetailSection" class="ar-detail-panel" style="display:none;">
+                <div id="arAssertionDetailEmpty" class="ar-detail-empty">
+                    <p>Select an assertion from the list, or click "+ Add New" to create one.</p>
+                </div>
+
+                <form id="arAssertionDetailForm" class="ar-detail-form" style="display:none;">
+                    <input type="hidden" id="arAssertionEditingId" value="">
+
+                    <div class="ar-field">
+                        <label for="arAssertionNameInput">Name</label>
+                        <input type="text" id="arAssertionNameInput" required>
+                    </div>
+
+                    <div class="ar-field">
+                        <label for="arAssertionDescriptionInput">Description</label>
+                        <textarea id="arAssertionDescriptionInput" rows="3"></textarea>
+                    </div>
+
+                    <div id="arAssertionDetailStatus" class="upload-status" style="display:none;"></div>
+
+                    <div class="ar-detail-actions">
+                        <button type="button" id="arAssertionSaveBtn" class="ar-btn-save">Save</button>
+                        <button type="button" id="arAssertionDeleteBtn" class="ar-btn-delete"
+                            style="display:none;">Delete</button>
+                        <button type="button" id="arAssertionRestoreBtn" class="ar-btn-restore"
+                            style="display:none;">Restore</button>
+                    </div>
+                </form>
+            </div>
+
+        </div>
+
+        <!-- Assign Categories (Section 2, Phase 5, FINAL): full-page view listing the
+             current client's latest parsed Trial Balance accounts, with a per-row Category
+             dropdown (smart-fill cascade on selection) and a force-apply icon on parent
+             rows only. Hidden by default; opened by #arAssignCategoriesBtn above, which
+             hides #arShellContainer in its place — same whole-flow-swap pattern as
+             trial_balance.js's Available Trial Balances view. -->
+        <div id="arAssignCategoriesSection" class="ar-assign-categories-section" style="display:none;">
+            <div class="ar-assign-categories-header">
+                <button type="button" id="arAssignCategoriesBackBtn" class="ar-btn-back">← Back to
+                    Categories</button>
+                <div>
+                    <h2 class="ar-assign-categories-title">Assign Categories — Trial Balance Accounts</h2>
+                    <span id="arAssignCategoriesSubtitle" class="ar-assign-categories-subtitle"></span>
+                </div>
+                <!-- Confirmed fix: bulk reset for the currently loaded (latest parsed) Trial
+                     Balance only. margin-left:auto (see style.css) pushes it to the far right
+                     of this flex header row. -->
+                <button type="button" id="arResetCategoriesBtn" class="ar-btn-reset-categories">🔄
+                    Reset</button>
+            </div>
+
+            <div id="arAssignCategoriesStatus" class="upload-status" style="display:none;"></div>
+            <!-- Momentary success toast (bottom-right, auto-dismisses) - see showAssignCategoriesToast()
+                 in audit_rules.js, same pattern as showVerifyToast() in procedure_modal.js. -->
+            <div id="arAssignCategoriesToast" class="voucher-verify-toast"></div>
+            <div id="arAssignCategoriesEmpty" class="ar-list-empty" style="display:none;"></div>
+
+            <table id="arAssignCategoriesTable" class="ar-tb-table" style="display:none;">
+                <thead>
+                    <tr>
+                        <th>Account Code</th>
+                        <th>Account Name</th>
+                        <th>Parent/Leaf</th>
+                        <th>Category</th>
+                    </tr>
+                </thead>
+                <tbody id="arAssignCategoriesTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="/static/sortable.min.js"></script>
+    <script src="/static/loading_ui.js?v=2"></script>
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/audit_rules.js?v=27"></script>
+</body>
+
+</html>

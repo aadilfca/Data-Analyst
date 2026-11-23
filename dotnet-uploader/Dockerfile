@@ -4,7 +4,6 @@ WORKDIR /workspace
 COPY dotnet-uploader/global.json dotnet-uploader/global.json
 COPY dotnet-uploader/src/AuditPlatform.Api/ dotnet-uploader/src/AuditPlatform.Api/
 COPY dotnet-uploader/frontend/ dotnet-uploader/frontend/
-COPY static/ static/
 
 WORKDIR /workspace/dotnet-uploader
 RUN dotnet restore src/AuditPlatform.Api/AuditPlatform.Api.csproj -p:NuGetAudit=false

@@ -9,9 +9,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="AuditPlatform.WorkspaceAdoption" />
     <InternalsVisibleTo Include="AuditPlatform.Api.Tests" />
-    <Content Include="../../../static/*.html;../../../static/*.js;../../../static/*.css;../../../static/*.svg;../../../static/*.png" Link="ShellStatic/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../frontend/*" Link="ShellFrontend/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../../static/vendor/xlsx.full.min.js" Link="ShellStatic/xlsx.full.min.js" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
     <PackageReference Include="ExcelDataReader" Version="3.9.0" />
     <PackageReference Include="Npgsql" Version="10.0.3" />

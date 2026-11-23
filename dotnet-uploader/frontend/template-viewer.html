@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Template Viewer</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        /* Page-specific styling, scoped to this page only — matches the established
+           per-page convention used by verification.html/client_settings.html/settings.html
+           (page-specific CSS lives here, not in the shared static/style.css, unless a class
+           is meant to be reused across pages). */
+
+        /* Toolbar bar: Start Date / End Date / Search / Fetch, modeled visually on the
+           Transaction Report view's own date-range bar in verification.html for consistency.
+           All controls here are inert this phase — no listeners are attached to any of them;
+           wiring is Phase 3 (date range → data fetch) and Phase 4 (search). */
+        .tv-toolbar {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+            background: white;
+            padding: 16px 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            margin-bottom: 20px;
+        }
+
+        .tv-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tv-field.tv-search-field {
+            flex: 1 1 220px;
+            min-width: 200px;
+        }
+
+        .tv-field label {
+            font-weight: 600;
+            font-size: 13px;
+            color: #1e293b;
+        }
+
+        .tv-field input[type="date"],
+        .tv-field input[type="text"] {
+            padding: 6px 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .tv-field input[type="text"] {
+            width: 100%;
+        }
+
+        #tvFetchBtn {
+            padding: 6px 20px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #tvStatus {
+            font-size: 13px;
+            color: #64748b;
+        }
+
+        /* Table container + placeholder loading/empty states — Phase 3 will drive which of
+           these is visible and populate real table markup; both are static/inert here. */
+        .tv-table-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            padding: 16px;
+            min-height: 200px;
+        }
+
+        .tv-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: #94a3b8;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        .tv-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: tv-spin 0.6s linear infinite;
+            margin-bottom: 10px;
+        }
+
+        @keyframes tv-spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Phase 3: plain data table — headers/rows are populated by JS from whatever
+           columns the current template's data actually has (see renderTemplateData() in
+           template-viewer.js), not a hardcoded column list. Kept intentionally simple
+           (no zebra striping/sticky header/grouping) since this is a first pass; visual
+           polish can follow in a later phase if needed. */
+        .tv-table-scroll {
+            overflow-x: auto;
+        }
+
+        #tvDataTable {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        #tvDataTable th,
+        #tvDataTable td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #e2e8f0;
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        #tvDataTable th {
+            background: #f8fafc;
+            color: #1e293b;
+            font-weight: 600;
+        }
+    </style>
+</head>
+
+<body data-nav-module="Template Viewer" data-nav-parent="verification.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <header class="module-header">
+            <!-- Real page link (not JS history.back()) so this always returns to the
+                 Verification module's card strip specifically — verification.html with no
+                 query params lands on its dashboard/hub view, where the card strip lives. -->
+            <a href="/static/verification.html" class="back-link">← Back to Verification</a>
+            <h1 id="templateViewerTitle">📄 Template Viewer</h1>
+            <p id="templateViewerSubtitle">Loading template...</p>
+        </header>
+
+        <!-- Date range + Fetch are functional as of Phase 3 (see template-viewer.js).
+             Search stays inert (placeholder text still says "coming soon") until Phase 4. -->
+        <div class="tv-toolbar">
+            <div class="tv-field">
+                <label for="tvStartDate">Start Date</label>
+                <input type="date" id="tvStartDate">
+            </div>
+            <div class="tv-field">
+                <label for="tvEndDate">End Date</label>
+                <input type="date" id="tvEndDate">
+            </div>
+            <div class="tv-field tv-search-field">
+                <label for="tvSearchInput">Search</label>
+                <input type="text" id="tvSearchInput" placeholder="Search across all columns (coming soon)">
+            </div>
+            <button id="tvFetchBtn">📊 Fetch</button>
+            <span id="tvStatus"></span>
+        </div>
+
+        <!-- Table container: three mutually-exclusive states, all toggled by JS
+             (template-viewer.js's setViewerState()) — #tvEmptyState (no fetch yet / zero
+             rows), #tvLoadingState (fetch in flight), and #tvDataTableWrapper (populated
+             table, Phase 3). Markup for the table itself is empty here — its <thead>/<tbody>
+             are built fresh on every fetch by renderTemplateData(). -->
+        <div class="tv-table-container">
+            <div id="tvTableWrapper">
+                <div id="tvEmptyState" class="tv-placeholder">
+                    No data loaded yet — data fetching will be wired in a later phase.
+                </div>
+                <div id="tvLoadingState" class="tv-placeholder" style="display:none;">
+                    <span class="tv-spinner"></span>
+                    Loading...
+                </div>
+                <div id="tvDataTableWrapper" class="tv-table-scroll" style="display:none;">
+                    <table id="tvDataTable">
+                        <thead></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/template-viewer.js?v=2"></script>
+</body>
+
+</html>

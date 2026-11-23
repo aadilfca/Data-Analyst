@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Storage Cleanup</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        .cleanup-note, .cleanup-card { background: white; border-radius: 16px; padding: 20px 25px; box-shadow: 0 2px 8px rgba(0,0,0,.06); margin-bottom: 20px; min-width: 0; overflow-wrap: anywhere; }
+        .cleanup-note { border-left: 5px solid #2563eb; color: #334155; }
+        .cleanup-note strong { color: #1e3a8a; }
+        .cleanup-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .cleanup-button { border: 0; border-radius: 7px; padding: 10px 18px; background: #2563eb; color: white; cursor: pointer; font-weight: 600; }
+        .cleanup-button:disabled { opacity: .6; cursor: wait; }
+        .cleanup-status { color: #64748b; font-size: 14px; }
+        .cleanup-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .cleanup-stat { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; }
+        .cleanup-stat span { display: block; color: #64748b; font-size: 12px; margin-bottom: 6px; }
+        .cleanup-stat strong { color: #1e293b; font-size: 22px; }
+        #storageDiagnostics p { margin: 0 0 12px; line-height: 1.5; color: #475569; font-size: 14px; }
+        .cleanup-table { width: 100%; min-width:760px; border-collapse: collapse; font-size: 13px; }
+        .cleanup-storage-table { min-width:1200px; }
+        .cleanup-storage-table td:nth-child(n+3) { white-space:nowrap; }
+        .cleanup-table th, .cleanup-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+        .cleanup-table th { background: #f8fafc; color: #475569; }
+        .protected-label { color: #166534; font-weight: 600; }
+        .removable-label { color: #92400e; font-weight: 600; }
+        .cleanup-error { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; padding: 12px; border-radius: 8px; display: none; margin-bottom: 16px; }
+        .cleanup-danger { border-left: 5px solid #b91c1c; }
+        .cleanup-danger p { color: #475569; }
+        .cleanup-confirm-row { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+        .cleanup-confirm-row label { display: flex; flex-direction: column; gap: 6px; color: #475569; font-size: 13px; font-weight: 600; min-width: 0; max-width: 100%; }
+        .cleanup-confirm-row input { width: 310px; max-width: 100%; min-width: 0; border: 1px solid #cbd5e1; border-radius: 7px; padding: 10px 12px; font: inherit; }
+        .cleanup-delete-button { background: #b91c1c; }
+        .cleanup-maintenance-button { background: #7c3aed; padding: 7px 10px; font-size: 12px; margin: 2px 0; }
+        .cleanup-maintenance-button:disabled { cursor: not-allowed; }
+        .cleanup-evidence { color: #475569; font-size: 13px; line-height: 1.5; }
+        .cleanup-evidence-ok { color: #166534; font-weight: 600; }
+        .cleanup-evidence-warning { color: #92400e; font-weight: 600; }
+        .cleanup-evidence-blocked { color: #991b1b; font-weight: 600; }
+        .cleanup-maintenance-result { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 12px; border-radius: 8px; display: none; margin-top: 14px; }
+        .cleanup-maintenance-result.review-required { color: #92400e; background: #fffbeb; border-color: #fde68a; }
+        .cleanup-complete { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; padding: 12px; border-radius: 8px; display: none; margin-top: 14px; }
+        @media (max-width:600px) {
+            .firm-navbar { height:auto; min-height:70px; padding:12px; }
+            .firm-navbar .nav-container { flex-wrap:wrap; gap:8px; }
+            .firm-nav-left { flex-wrap:wrap; gap:8px; min-width:0; max-width:100%; }
+            .firm-nav-right { margin-left:auto; }
+        }
+    </style>
+</head>
+
+<body data-nav-module="Storage Cleanup">
+    <nav class="navbar firm-navbar"><div class="nav-container" id="firmNav"></div></nav>
+    <div class="main-container">
+        <header class="module-header">
+            <h1>🧹 Storage Cleanup</h1>
+            <p>Review database storage before any administrator-approved cleanup.</p>
+        </header>
+        <section id="nativeCleanupPanel" class="cleanup-card" hidden>
+            <h2>Selected-client cleanup</h2>
+            <p>Remove eligible temporary validation plans for one template. To remove stored data, use Data Bank’s backup-and-delete action. Shared log deletion, index changes and compaction are unavailable here.</p>
+            <p id="nativeCleanupStatus" role="status" aria-live="polite"></p>
+            <p><a href="/static/client_select.html">Choose a client</a> · <a href="/static/databank.html">Open Data Bank</a></p>
+            <div class="cleanup-toolbar">
+                <label>Template <select id="nativeCleanupTemplate" aria-label="Cleanup template"></select></label>
+                <button type="button" id="nativeCleanupRefresh" class="cleanup-button">Refresh preview</button>
+            </div>
+            <p id="nativeCleanupCounts"></p>
+            <label>Type exactly: DELETE APPROVED VALIDATION PLANS
+                <input id="nativeCleanupConfirmation" type="text" autocomplete="off" spellcheck="false" aria-label="Validation plan cleanup confirmation">
+            </label>
+            <button type="button" id="nativeCleanupApply" class="cleanup-button cleanup-delete-button" disabled>Remove eligible plans</button>
+            <h3>Recent cleanup outcomes</h3>
+            <p>These outcomes distinguish committed database deletion from unfinished temporary-file cleanup. Refresh to check again.</p>
+            <div id="nativeCleanupRecent"></div>
+        </section>
+        <div class='cleanup-note cleanup-danger'><strong>Development mode:</strong> backup-before-cleanup is not enforced yet. Use the fresh preview and exact confirmation only while testing deletion behavior.</div>
+        <div class="cleanup-note"><strong>Protected data:</strong> current Data Bank rows, Verification details, Trial Balance data, linked evidence, and in-app Audit Rules configuration are not cleanup candidates. Cleanup removes only the approved candidates shown in a fresh preview. Index review, reindexing, dropping, and VACUUM/compaction remain separate explicit actions.</div>
+        <div id="cleanupError" class="cleanup-error"></div>
+        <section class="cleanup-card">
+            <div class="cleanup-toolbar">
+                <button type="button" id="refreshPreviewBtn" class="cleanup-button">Refresh preview</button>
+                <span id="previewStatus" class="cleanup-status">Loading preview…</span>
+            </div>
+            <div class="cleanup-stats">
+                <div class="cleanup-stat"><span>Allocated database files</span><strong id="databaseSize">—</strong></div>
+                <div class="cleanup-stat"><span>Protected Data Bank rows</span><strong id="clientDataCount">—</strong></div>
+                <div class="cleanup-stat"><span>Verification rows</span><strong id="verificationCount">—</strong></div>
+                <div class="cleanup-stat"><span>Trial Balance rows</span><strong id="trialBalanceCount">—</strong></div>
+                <div class="cleanup-stat"><span>Retired unlinked rows</span><strong id="retiredCount">—</strong></div>
+                <div class="cleanup-stat"><span>Removable log storage</span><strong id="logStorage">—</strong></div>
+            </div>
+        </section>
+        <section class="cleanup-card">
+            <h2>What occupies the space</h2>
+            <div id="storageDiagnostics" role="status" aria-live="polite">Waiting for a fresh storage inspection.</div>
+            <p>Indexes help the app find records and prevent duplicates. Deletion removes their entries; PostgreSQL can retain pages for reuse. Empty tables keep small index structures ready for future uploads.</p>
+        </section>
+        <section class="cleanup-card">
+            <h2>Storage by table</h2>
+            <p>All public tables are listed. Row estimates can lag behind changes. Other pages include large-value storage and internal page maps; they are not a measurement of free space.</p>
+            <div style="overflow-x:auto;" tabindex="0" role="region" aria-label="Storage by table, scroll horizontally for all columns"><table class="cleanup-table cleanup-storage-table">
+                <thead><tr><th>Table</th><th>Classification</th><th>Table files</th><th>Indexes</th><th>Other pages</th><th>Live rows (estimate)</th><th>Dead rows (estimate)</th><th>Last automatic vacuum</th><th>Total</th></tr></thead>
+                <tbody id="tableSizesBody"></tbody>
+            </table></div>
+        </section>
+        <section class="cleanup-card">
+            <h2>Candidate summary</h2>
+            <div style="overflow-x:auto;"><table class="cleanup-table">
+                <thead><tr><th>Candidate</th><th>Rows</th><th>Estimated size</th><th>Rule</th></tr></thead>
+                <tbody id="candidateBody"></tbody>
+            </table></div>
+        </section>
+        <section class="cleanup-card">
+            <h2>Index optimization evidence</h2>
+            <p class="cleanup-evidence">This is a read-only review of <code>client_data</code> indexes. A candidate is actionable only when the server reports that it is allow-listed, non-integrity, unused by representative plans, and eligible in the fresh preview. Missing bloat evidence blocks reindexing rather than being treated as proof that an index is healthy.</p>
+            <div class="cleanup-stats">
+                <div class="cleanup-stat"><span>client_data indexes</span><strong id="indexReviewTotal">—</strong></div>
+                <div class="cleanup-stat"><span>Index storage</span><strong id="indexReviewBytes">—</strong></div>
+                <div class="cleanup-stat"><span>Duplicate identity groups</span><strong id="duplicateIdentityGroups">—</strong></div>
+            </div>
+            <p id="indexPlanEvidenceStatus" class="cleanup-evidence">Planner evidence: waiting for a fresh preview.</p>
+            <p id="indexBloatEvidenceStatus" class="cleanup-evidence">Bloat evidence: waiting for a fresh preview.</p>
+            <div style="overflow-x:auto;"><table class="cleanup-table">
+                <thead><tr><th>Index</th><th>Size</th><th>Observed scans</th><th>Classification</th><th>Evidence / gate</th><th>Server-approved action</th></tr></thead>
+                <tbody id="indexReviewBody"></tbody>
+            </table></div>
+        </section>
+        <section class="cleanup-card cleanup-danger">
+            <h2>Apply one approved index action</h2>
+            <p>Use only an action button enabled by the fresh server preview. No index name or operation is accepted from free text. This confirmation is separate from row cleanup.</p>
+            <div class="cleanup-confirm-row">
+                <label for="indexMaintenanceConfirmation">Type exactly: REMOVE APPROVED INDEX
+                    <input id="indexMaintenanceConfirmation" type="text" autocomplete="off" spellcheck="false" placeholder="REMOVE APPROVED INDEX">
+                </label>
+            </div>
+            <div id="indexMaintenanceResult" class="cleanup-maintenance-result"></div>
+        </section>
+        <section class="cleanup-card cleanup-danger">
+            <h2>Apply approved cleanup</h2>
+            <p>Cleanup is available for development testing after reviewing the fresh preview and confirming the exact deletion phrase.</p>
+            <div class="cleanup-confirm-row">
+                <label for="cleanupConfirmation">Type exactly: DELETE APPROVED STORAGE DATA
+                    <input id="cleanupConfirmation" type="text" autocomplete="off" spellcheck="false" placeholder="DELETE APPROVED STORAGE DATA">
+                </label>
+                <button type="button" id="applyCleanupBtn" class="cleanup-button cleanup-delete-button" disabled>Apply cleanup</button>
+            </div>
+            <div id="cleanupComplete" class="cleanup-complete"></div>
+        </section>
+    </div>
+    <script src="/static/client_context.js?v=30"></script>
+    <script src="/static/api_utils.js?v=1"></script>
+    <script src="/static/storage_cleanup.js?v=7"></script>
+</body>
+
+</html>

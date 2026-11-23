@@ -5,8 +5,8 @@ using Microsoft.Extensions.Options;
 
 namespace AuditPlatform.Api.Shell;
 
-// Only copied, flat public assets are served. No repository, workbook or
-// upload directory is mounted. HTML access is rechecked before its bytes leave.
+// Only copied, flat C# frontend assets are served. No repository, workbook,
+// upload or Python static directory is mounted. HTML access is rechecked before its bytes leave.
 public sealed class ApplicationShellMiddleware(RequestDelegate next)
 {
     private static readonly HashSet<string> PublicPages = ["login.html","app_info.html","privacy.html","terms.html"];
@@ -82,10 +82,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         if (file.Length==0 || file[0]=='.' || file.Any(c=>!char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.'))
             || extension is not (".html" or ".js" or ".css" or ".svg" or ".png"))
         { context.Response.StatusCode=404; return; }
-        var frontendPath=Path.Combine(AppContext.BaseDirectory,"ShellFrontend",file);
-        var fullPath=shell || File.Exists(frontendPath)
-            ? frontendPath
-            : Path.Combine(AppContext.BaseDirectory,"ShellStatic",file);
+        var fullPath=Path.Combine(AppContext.BaseDirectory,"ShellFrontend",file);
         if (!File.Exists(fullPath)) { context.Response.StatusCode=404; return; }
         var html=extension==".html";
         var picker=shell && file=="tenant_select.html";
@@ -143,8 +140,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
                 context.Response.StatusCode=503;await context.Response.WriteAsync("The native Upload page requires integration review.",context.RequestAborted);return;
             }
             content=coordinator.Replace(content,"<script src=\"/static/api_utils.js\"></script><script src=\"/shell/upload_native.js\"></script>");
-            content=content.Replace("/static/vendor/xlsx.full.min.js", "/static/xlsx.full.min.js",StringComparison.Ordinal)
-                .Replace("</head>","<link rel=\"stylesheet\" href=\"/shell/upload_native.css\"></head>",StringComparison.Ordinal);
+            content=content.Replace("</head>","<link rel=\"stylesheet\" href=\"/shell/upload_native.css\"></head>",StringComparison.Ordinal);
         }
         content=content.Replace("<head>","<head>"+script,StringComparison.Ordinal);
         await context.Response.WriteAsync(content,context.RequestAborted);

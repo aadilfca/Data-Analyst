@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Reports | Internal Audit App</title>
+    <link rel='stylesheet' href='/static/style.css?v=76'>
+    <style>
+        /* Read-only statement presentation follows the ACC outline's colours and hierarchy. */
+        #financialStatementsView[hidden], #balanceSheetView[hidden], #balanceSheetNotesView[hidden], #incomeStatementNotesView[hidden] { display: none !important; }
+        .balance-sheet-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+        .balance-sheet-toolbar h2 { margin: 0; font-size: 21px; color: #18344b; }
+        .balance-sheet-toolbar h2:focus { outline: none; }
+        .balance-sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        #balanceSheetView { width: 100%; max-width: none; margin: 0; color: #1a1a2e; }
+        #balanceSheetView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
+        #balanceSheetView #balanceSheetToolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-bottom: 12px; }
+        #balanceSheetView .balance-sheet-title-row { display: flex; align-items: center; min-width: 0; }
+        #balanceSheetView #balanceSheetHeading { margin: 0; color: #18344b; font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
+        #balanceSheetView .balance-sheet-meta-row, #balanceSheetView .balance-sheet-meta-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        #balanceSheetView .balance-sheet-meta-row { width: 100%; box-sizing: border-box; justify-content: space-between; }
+        #balanceSheetView .balance-sheet-meta-left { flex: 0 1 auto; flex-wrap: nowrap; }
+        #balanceSheetView #balanceSheetDate { margin: 0; color: #536577; font-size: 13px; font-weight: 700; white-space: nowrap; }
+        #balanceSheetView .balance-sheet-actions { align-items: center; justify-content: flex-end; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
+        #balanceSheetView .balance-sheet-actions .cashflows-secondary { padding: 7px 9px; font-size: 13px; white-space: nowrap; }
+        #balanceSheetView .balance-sheet-icon-button { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #38536b; cursor: pointer; }
+        #balanceSheetView .balance-sheet-icon-button:hover { border-color: #7d9bb3; background: #f3f7fa; color: #18344b; }
+        #balanceSheetView .balance-sheet-icon-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+        #balanceSheetStatus { margin: 0; padding: 20px 0; color: #64748b; font-size: 13px; }
+        #balanceSheetStatus[hidden], #balanceSheetTable[hidden], #balanceSheetReload[hidden] { display: none; }
+        #balanceSheetView #balanceSheetDiagnosticsOpen[hidden], #balanceSheetView #statementClosingOpen[hidden], #balanceSheetView .balance-sheet-actions button[hidden] { display: none; }
+        #balanceSheetStatus.is-error { color: #b91c1c; }
+        #balanceSheetView .balance-sheet-table-wrap { max-width: 100%; overflow-x: auto; }
+        #balanceSheetTable { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: auto; font-size: 14px; }
+        #balanceSheetTable th, #balanceSheetTable td { padding: 12px 16px; overflow-wrap: anywhere; }
+        #balanceSheetTable thead th { color: #64748b; font-weight: 500; text-align: left; border-bottom: 1px solid #dbe4ea; }
+        #balanceSheetTable .balance-sheet-amount { width: 22%; text-align: right; }
+        #balanceSheetTable .bs-heading th { padding-top: 14px; padding-bottom: 14px; border-top: 12px solid #fff; border-radius: 8px 8px 0 0; background: #f3f7fa; color: #18344b; text-align: left; }
+        #balanceSheetTable .bs-category th { padding-left: 32px; font-weight: 400; text-align: left; color: #34495e; }
+        #balanceSheetTable .bs-category > * { border-bottom: 1px solid #edf1f4; }
+        #balanceSheetTable .bs-subtotal > *, #balanceSheetTable .bs-total > * { border-top: 2px solid #9fb5c5; background: #f4f8fb; color: #18344b; text-align: left; }
+        #balanceSheetTable .bs-total > * { border-top-color: #69869b; background: #eef4f8; }
+        #balanceSheetTable .bs-inactive { opacity: .58; }
+        #balanceSheetTable .bs-inactive-label { margin-left: 8px; font-size: 11px; font-weight: 400; color: #64748b; }
+        #balanceSheetView button:focus-visible, #financialStatementsView [role=button]:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
+        @media (max-width: 600px) {
+            #balanceSheetView .balance-sheet-paper { padding: 14px; }
+            #balanceSheetView .balance-sheet-meta-row { align-items: stretch; flex-direction: column; }
+            #balanceSheetView .balance-sheet-actions { justify-content: flex-start; flex-wrap: wrap; }
+            #balanceSheetView #balanceSheetUpload { width: min(260px, calc(100vw - 32px)); }
+            #balanceSheetDiagnosticsDialog .statement-dialog-header, #statementClosingDialog .statement-dialog-header { padding: 17px 17px 12px; }
+            #balanceSheetDiagnosticsDialog .statement-dialog-body, #statementClosingDialog .statement-dialog-body { padding: 16px 17px 18px; }
+            #balanceSheetTable th, #balanceSheetTable td { padding: 10px; }
+            #balanceSheetTable .bs-category th { padding-left: 20px; }
+            #balanceSheetTable .balance-sheet-amount { width: 25%; }
+        }
+        #balanceSheetUpload { width: min(180px, 30vw); min-width: 150px; flex: 0 1 180px; padding: 7px 28px 7px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #34495e; font: inherit; font-size: 12px; }
+        #statementClosingControls[hidden] { display: none; }
+        #statementClosingControls { display: grid; gap: 12px; color: #40566a; font-size: 13px; }
+        #statementClosingControls label { font-weight: 600; color: #243b53; }
+        #statementClosingStatus { width: 100%; padding: 9px 10px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #243b53; font: inherit; }
+        #statementClosingSave { justify-self: end; }
+        #balanceSheetDiagnosticsDialog { width: min(800px, calc(100vw - 32px)); max-width: none; max-height: min(78vh, 680px); padding: 0; border: 1px solid #d4dee6; border-radius: 14px; background: #fff; color: #243b53; box-shadow: 0 24px 70px rgb(15 35 55 / 24%); }
+        #statementClosingDialog { width: min(560px, calc(100vw - 32px)); max-width: none; max-height: min(78vh, 680px); padding: 0; border: 1px solid #d4dee6; border-radius: 14px; background: #fff; color: #243b53; box-shadow: 0 24px 70px rgb(15 35 55 / 24%); }
+        #balanceSheetDiagnosticsDialog::backdrop, #statementClosingDialog::backdrop { background: rgb(15 35 55 / 42%); backdrop-filter: blur(2px); }
+        #balanceSheetDiagnosticsDialog .statement-dialog-header, #statementClosingDialog .statement-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 20px 22px 14px; border-bottom: 1px solid #e5ebf0; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-header h3, #statementClosingDialog .statement-dialog-header h3 { margin: 0; color: #18344b; font-size: 17px; line-height: 1.35; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-header p, #statementClosingDialog .statement-dialog-header p { margin: 4px 0 0; color: #64748b; font-size: 12px; line-height: 1.5; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-close, #statementClosingDialog .statement-dialog-close { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; padding: 0; border: 1px solid #dbe4ea; border-radius: 8px; background: #fff; color: #536577; font-size: 19px; cursor: pointer; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-body, #statementClosingDialog .statement-dialog-body { padding: 18px 22px 22px; }
+        #balanceSheetDiagnosticsDialog .statement-dialog-body { max-height: calc(78vh - 84px); overflow: auto; }
+        #balanceSheetDiagnosticsDialog .review-table-section + .review-table-section { margin-top: 20px; }
+        #balanceSheetDiagnosticsDialog .review-table-section h4 { margin: 0 0 8px; color: #243b53; font-size: 13px; font-weight: 700; }
+        #balanceSheetDiagnosticsDialog .review-table-wrap { max-width: 100%; overflow-x: auto; }
+        #balanceSheetDiagnosticsDialog .review-check-table { min-width: 610px; }
+        #balanceSheetDiagnosticsDialog .review-items-table { min-width: 500px; }
+        #balanceSheetDiagnosticsDialog .review-items-table tbody th { width: 30%; }
+        #balanceSheetDiagnosticsDialog .review-value { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+        #balanceSheetDiagnosticsDialog .review-value-label { color: #64748b; font-size: 11px; white-space: nowrap; }
+        #balanceSheetDiagnosticsDialog .review-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #balanceSheetDiagnosticsDialog .review-difference-alert { color: #b91c1c; font-weight: 700; }
+        #balanceSheetDiagnosticsDialog .review-difference-match { color: #166534; font-weight: 700; }
+        #balanceSheetDiagnosticsDialog .review-item-detail { overflow-wrap: anywhere; }
+        #balanceSheetDiagnosticsDialog[hidden], #statementClosingDialog[hidden] { display: none; }
+        #balanceSheetView .balance-sheet-icon-button:focus-visible, #balanceSheetDiagnosticsDialog button:focus-visible, #statementClosingDialog button:focus-visible, #statementClosingDialog select:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        #balanceSheetRows .statement-capital-breakdown { display: block; margin-top: 5px; color: #64748b; font-size: 11px; font-weight: 400; }
+
+        #balanceSheetView .balance-sheet-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #balanceSheetTable .balance-sheet-amount { text-align: right; }
+        /* Preserve readable labels on phones; only the statement scrolls sideways. */
+        #balanceSheetTable.has-comparative { min-width: 760px; table-layout: fixed; }
+        #balanceSheetTable.has-comparative thead .balance-sheet-amount { white-space: normal; }
+        @media (max-width: 600px) {
+            #balanceSheetTable.has-comparative { min-width: 620px; }
+        }
+        #balanceSheetView .statement-reconciliation[hidden] { display: none; }
+        #balanceSheetView .statement-reconciliation { margin-top: 16px; border-top: 1px solid #dbe4ea; padding-top: 12px; }
+        #balanceSheetView .statement-reconciliation > summary { cursor: pointer; font-size: 13px; font-weight: 700; line-height: 1.6; overflow-wrap: anywhere; }
+        #balanceSheetView .statement-reconciliation[data-state="not_reconciled"] > summary { color: #b91c1c; }
+        #balanceSheetView .statement-reconciliation[data-state="reconciled"] > summary, #balanceSheetView .statement-reconciliation[data-state="reconciled_to_tb"] > summary { color: #166534; }
+        #balanceSheetView .statement-reconciliation > summary:focus-visible { outline: 2px solid #1769aa; outline-offset: 3px; }
+        #balanceSheetView .statement-reconciliation .statement-reconciliation-body { margin-top: 12px; }
+        #balanceSheetView .statement-reconciliation p, #balanceSheetView .statement-reconciliation-issues { color: #64748b; font-size: 12px; line-height: 1.6; }
+        #balanceSheetView .statement-reconciliation-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        #balanceSheetView .statement-reconciliation-table th, #balanceSheetView .statement-reconciliation-table td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: left; }
+        #balanceSheetView .statement-reconciliation-table thead th { background: #f3f7fa; color: #536577; }
+        #balanceSheetView .statement-reconciliation-table .reconciliation-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #balanceSheetView .statement-reconciliation-table tr.reconciliation-total > * { border-top: 2px solid #9fb5c5; background: #f4f8fb; font-weight: 700; }
+        #balanceSheetView .statement-reconciliation-issues { padding-left: 20px; color: #b91c1c; }
+        #balanceSheetTable .opening-income-review > * { color: #b91c1c; border-bottom: 1px solid #fecaca; }
+        #balanceSheetTable .opening-income-review th { text-align: left; font-weight: 500; }
+        #balanceSheetTable .opening-income-review summary { cursor: pointer; }
+        #balanceSheetTable .opening-income-review ul { padding-left: 18px; font-size: 12px; font-weight: 400; line-height: 1.6; }
+        .balance-sheet-note-reference { min-width: 34px; padding: 4px 8px; border: 1px solid #cbd5e1; border-radius: 5px; background: #f8fafc; color: #1769aa; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+        .balance-sheet-note-reference:hover { border-color: #1769aa; background: #eff6ff; }
+        .balance-sheet-note-reference:focus-visible, #balanceSheetNotesView button:focus-visible, #incomeStatementNotesView button:focus-visible { outline: 2px solid #1769aa; outline-offset: 2px; }
+        #balanceSheetNotesView, #incomeStatementNotesView { width: 100%; max-width: none; margin: 0; color: #1a1a2e; }
+        .statement-notes-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-bottom: 12px; }
+        .statement-notes-title-row { display: flex; align-items: center; min-width: 0; }
+        .statement-notes-title-row h2 { margin: 0; color: #18344b; font-size: 22px; line-height: 1.3; overflow-wrap: anywhere; }
+        .statement-notes-title-row h2:focus { outline: none; }
+        .statement-notes-meta-row, .statement-notes-meta-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .statement-notes-meta-row { width: 100%; box-sizing: border-box; justify-content: space-between; }
+        .statement-notes-meta-left { flex: 1 1 auto; flex-wrap: nowrap; }
+        .statement-notes-period-label { color: #536577; font-size: 13px; font-weight: 700; white-space: nowrap; }
+        .statement-notes-period-value { color: #18344b; font-size: 14px; white-space: nowrap; }
+        .statement-notes-actions { align-items: center; justify-content: flex-end; flex: 0 0 auto; flex-wrap: nowrap; margin-left: auto; }
+        #balanceSheetNotesView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
+        #incomeStatementNotesView .balance-sheet-paper { padding: 24px; border: 1px solid #dbe4ea; border-radius: 12px; background: #fff; }
+        #balanceSheetNotesStatus, #incomeStatementNotesStatus { padding: 18px 0; color: #64748b; font-size: 13px; }
+        #balanceSheetNotesStatus:empty, #incomeStatementNotesStatus:empty { display: none; }
+        #balanceSheetNotesStatus.is-error, #incomeStatementNotesStatus.is-error { color: #b91c1c; }
+        .balance-sheet-notes-table-wrap { max-width: 100%; overflow-x: auto; }
+        #balanceSheetNotesTable, #balanceSheetNotesCoverageTable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
+        #balanceSheetNotesTable { min-width: 650px; }
+        #balanceSheetNotesTable th, #balanceSheetNotesTable td, #balanceSheetNotesCoverageTable th, #balanceSheetNotesCoverageTable td { padding: 11px 13px; border-bottom: 1px solid #edf1f4; }
+        #balanceSheetNotesTable thead th, #balanceSheetNotesCoverageTable thead th { color: #64748b; font-weight: 500; text-align: left; }
+        #balanceSheetNotesTable .balance-sheet-amount, #balanceSheetNotesCoverageTable .balance-sheet-amount { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #balanceSheetNotesTable .bs-note-root > * { border-top: 2px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
+        #balanceSheetNotesTable .bs-note-subtotal > *, #incomeStatementNotesTable .bs-note-subtotal > * { border-top: 1px solid #c4d2dc; background: #f8fafc; color: #455a6b; font-weight: 600; }
+        #balanceSheetNotesTable .bs-note-total > *, #incomeStatementNotesTable .bs-note-total > * { border-top: 3px double #71899b; background: #e8f0f5; color: #18344b; font-weight: 800; }
+        #balanceSheetNotesTable .bs-note-group-gap > td { height: 18px; padding: 0; border: 0; background: transparent; }
+        #balanceSheetNotesTable .bs-note-child > th { font-weight: 500; color: #34495e; }
+        #balanceSheetNotesTable .bs-note-inactive { opacity: .58; }
+        #balanceSheetNotesTable .bs-note-number { width: 90px; color: #64748b; font-size: 12px; white-space: nowrap; }
+        #balanceSheetNotesTable .bs-note-label { text-align: left; }
+        #balanceSheetNotesTable .bs-note-system > * { color: #536577; font-size: 12px; font-style: italic; }
+        #balanceSheetNotesCoverage { margin-top: 24px; padding-top: 16px; border-top: 1px solid #dbe4ea; }
+        #balanceSheetNotesCoverage h3 { margin: 0 0 8px; color: #18344b; font-size: 15px; }
+        #balanceSheetNotesCoverage p { color: #64748b; font-size: 12px; line-height: 1.6; }
+        #balanceSheetNotesCoverageTable { font-size: 12px; }
+        #balanceSheetNotesCoverageTable .notes-coverage-gap > * { color: #8a5b08; background: #fff8e7; }
+        #balanceSheetNotesCoverage[hidden], #balanceSheetNotesTable[hidden] { display: none; }
+        #balanceSheetNotesTable .bs-note-selected > * { box-shadow: inset 0 0 0 2px #1769aa; }
+        #incomeStatementNotesTable .bs-note-group-gap > td { height: 18px; padding: 0; border: 0; background: transparent; }
+        #incomeStatementNotesStatus { padding: 18px 0; color: #64748b; font-size: 13px; }
+        #incomeStatementNotesStatus.is-error { color: #b91c1c; }
+        #incomeStatementNotesTable, #incomeStatementNotesCoverageTable { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
+        #incomeStatementNotesTable { min-width: 520px; }
+        #incomeStatementNotesTable th, #incomeStatementNotesTable td, #incomeStatementNotesCoverageTable th, #incomeStatementNotesCoverageTable td { padding: 11px 13px; border-bottom: 1px solid #edf1f4; }
+        #incomeStatementNotesTable thead th, #incomeStatementNotesCoverageTable thead th { color: #64748b; font-weight: 500; text-align: left; }
+        #incomeStatementNotesTable .balance-sheet-amount, #incomeStatementNotesCoverageTable .balance-sheet-amount { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        #incomeStatementNotesTable .bs-note-root > * { border-top: 2px solid #9fb5c5; background: #f3f7fa; color: #18344b; font-weight: 700; }
+        #incomeStatementNotesTable .bs-note-child > th { font-weight: 500; color: #34495e; }
+        #incomeStatementNotesTable .bs-note-inactive { opacity: .58; }
+        #incomeStatementNotesTable .bs-note-number { width: 90px; color: #64748b; font-size: 12px; white-space: nowrap; }
+        #incomeStatementNotesTable .bs-note-label { text-align: left; }
+        #incomeStatementNotesCoverage { margin-top: 24px; padding-top: 16px; border-top: 1px solid #dbe4ea; }
+        #incomeStatementNotesCoverage h3 { margin: 0 0 8px; color: #18344b; font-size: 15px; }
+        #incomeStatementNotesCoverage p { color: #64748b; font-size: 12px; line-height: 1.6; }
+        #incomeStatementNotesCoverageTable { font-size: 12px; }
+        #incomeStatementNotesCoverageTable .notes-coverage-gap > * { color: #8a5b08; background: #fff8e7; }
+        #incomeStatementNotesCoverage[hidden], #incomeStatementNotesTable[hidden] { display: none; }
+        #incomeStatementNotesTable .bs-note-selected > * { box-shadow: inset 0 0 0 2px #1769aa; }
+        @media (max-width: 600px) {
+            #balanceSheetNotesView .balance-sheet-paper, #incomeStatementNotesView .balance-sheet-paper { padding: 14px; }
+            .statement-notes-meta-row { align-items: stretch; flex-direction: column; }
+            .statement-notes-meta-left { flex-wrap: wrap; }
+            .statement-notes-period-value { white-space: normal; }
+            .statement-notes-actions { justify-content: flex-start; flex-wrap: wrap; }
+        }
+        #balanceSheetTable .opening-income-review li { overflow-wrap: anywhere; }
+        #balanceSheetTable [hidden] { display: none; }
+        /* Scope this compact toolbar/picker to Cashflows, without changing shared pages. */
+        #cashflowsSummaryControlsPanel .cashflows-filter-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+        #cashflowsSummaryControlsPanel .cashflows-report-scope { flex: 1 1 auto; min-width: 0; gap: 9px; }
+        #cashflowsSummaryControlsPanel .cashflows-grouping-control { width: 100px; flex: 0 0 100px; }
+        #cashflowsSummaryControlsPanel .cashflows-treasury-control { width: 170px; flex: 0 0 170px; }
+        #cashflowsSummaryControlsPanel .cashflows-period-control { display: grid; gap: 5px; width: 140px; flex: 0 0 140px; }
+        #cashflowsSummaryControlsPanel .cashflows-grouping-control select { box-sizing: border-box; height: 36px; width: 100px; min-width: 0; }
+        #cashflowsSummaryControlsPanel .cashflows-treasury-control select { box-sizing: border-box; height: 36px; width: 170px; min-width: 0; }
+        #cashflowsSummaryControlsPanel .cashflows-period-button { box-sizing: border-box; height: 36px; width: 140px; min-width: 0; max-width: 140px; padding-inline: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        #cashflowsSummaryControlsPanel .cashflows-report-actions { gap: 6px; flex: 0 0 auto; }
+        #cashflowsSummaryControlsPanel .cashflows-secondary { padding-inline: 10px; }
+        #cashflowsCategoryBuildStatus { margin: 0 0 8px; padding: 6px 9px; border: 1px solid #dbe3ea; border-radius: 5px; background: #f8fafc; color: #64748b; font-size: 12px; opacity: .82; }
+        #cashflowsCategoryBuildStatus[hidden] { display: none !important; }
+        .cashflows-account-control { position: relative; display: grid; gap: 5px; flex: 0 0 176px; min-width: 0; }
+        .cashflows-account-control [hidden] { display: none !important; }
+        #cashflowsAccountButton { display: flex; align-items: center; justify-content: space-between; gap: 8px; box-sizing: border-box; width: 176px; height: 36px; padding: 7px 10px; border: 1px solid #cbd5e1; border-radius: 5px; color: #1a1a2e; background: #fff; font: inherit; font-size: 12px; text-align: left; }
+        #cashflowsAccountButton.is-pending { border-color: #a16b20; background: #fff7ed; }
+        #cashflowsAccountButton span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #cashflowsAccountPopover { position: absolute; top: calc(100% + 8px); right: 0; width: min(390px, calc(100vw - 32px)); z-index: 70; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px #1a1a2e22; color: #1a1a2e; }
+        #cashflowsAccountSearch { box-sizing: border-box; min-width: 0; width: 100%; margin: 8px 0; padding: 9px; border: 1px solid #cbd5e1; border-radius: 5px; font: inherit; font-size: 13px; }
+        #cashflowsAccountOptions { max-height: 290px; overflow-y: auto; overscroll-behavior: contain; }
+        #cashflowsAccountPopover .account-option { display: flex; align-items: start; gap: 9px; padding: 8px 5px; cursor: pointer; font-size: 13px; line-height: 1.4; }
+        #cashflowsAccountPopover input[type=checkbox] { min-width: 16px; width: 16px; height: 16px; flex: 0 0 16px; margin: 2px 0; accent-color: #24536e; }
+        #cashflowsAccountPopover .account-name { display: block; overflow-wrap: anywhere; }
+        #cashflowsAccountPopover .account-code, #cashflowsAccountHint { display: block; color: #64748b; font-size: 11px; }
+        #cashflowsAccountPopover .account-group { padding: 9px 5px 3px; color: #24536e; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+        #cashflowsAccountPopover .account-picker-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
+        #cashflowsAccountStatus { margin: 6px 0; color: #64748b; font-size: 12px; }
+        #cashflowsAccountButton:focus-visible, #cashflowsAccountPopover :focus-visible { outline: 2px solid #24536e; outline-offset: 2px; }
+        @media (min-width: 1250px) {
+            #cashflowsSummaryControlsPanel .cashflows-filter-bar, #cashflowsSummaryControlsPanel .cashflows-report-scope { flex-wrap: nowrap; }
+        }
+        @media (max-width: 700px) {
+            #cashflowsAccountPopover { position: fixed; top: 155px; left: 16px; right: 16px; width: auto; max-height: calc(100dvh - 180px); overflow-y: auto; }
+            #cashflowsAccountOptions { max-height: min(290px, 40dvh); }
+        }
+        /* Balance presentation belongs to this report; shared page styles stay unchanged. */
+        #cashflowsSummaryTable .cashflows-balance-row > td { background: #e2efda; color: #244832; font-weight: 700; border-top: 1px solid #b6c9b0; border-bottom: 1px solid #b6c9b0; }
+        #cashflowsSummaryTable .cashflows-balance-toggle { color: inherit; width: 100%; justify-content: space-between; font-weight: 700; }
+        #cashflowsSummaryTable .cashflows-balance-toggle::after { content: '\25B8'; margin-left: 8px; }
+        #cashflowsSummaryTable .cashflows-balance-toggle[aria-expanded='true']::after { content: '\25BE'; }
+        #cashflowsSummaryTable .cashflows-balance-toggle:focus-visible { outline: 2px solid #24536e; outline-offset: 3px; border-radius: 2px; }
+        #cashflowsSummaryTable .cashflows-balance-account > td { background: #fbfcfa; color: #1a1a2e; }
+        #cashflowsSummaryTable .cashflows-balance-calculated > td { background: #edf1f7; color: #31475e; font-weight: 600; border-top: 1px solid #c8d3df; border-bottom: 1px solid #c8d3df; }
+        #cashflowsSummaryTable .cashflows-balance-net > td { background: #f4f7f8; color: #31475e; font-weight: 700; border-top: 1px solid #c8d3df; }
+        #cashflowsSummaryTable .cashflows-balance-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        #cashflowsSummaryTable .cashflows-balance-unavailable, #cashflowsSummaryTable .cashflows-balance-state { color: #64748b; font-size: 11px; font-weight: 400; }
+        #cashflowsSummaryTable .cashflows-balance-account-label { cursor: help; border-bottom: 1px dotted #94a3b8; }
+        #cashflowsSummaryTable .cashflows-balance-review { box-shadow: inset 0 -2px 0 #c99032; }
+        #cashflowsSummaryTable [data-cashflow-balance-child][hidden] { display: none; }
+        #cashflowsSummaryTable .cashflows-balance-state { display: block; margin-top: 2px; }
+        @media (max-width: 600px) {
+            #cashflowsSummaryControlsPanel .cashflows-report-actions { flex-wrap: wrap; }
+        }
+        /* Full-page report view; the original Cashflows DOM is retained for returning. */
+        .reconciliation-page > .reconciliation-shell[hidden], #cashflowReconciliation[hidden] { display: none !important; }
+        .reconciliation-page > .reconciliation-shell.statement-view-active { padding-top: 88.5px; }
+        #cashflowReconciliation { box-sizing: border-box; width: 100%; min-width: 0; min-height: calc(100dvh - 72.5px); margin: 72.5px 0 0; color: #1a1a2e; background: #fff; }
+        #cashflowReconciliation [hidden] { display: none !important; }
+        #cashflowReconciliation .recon-accessible-context { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+        #cashflowReconciliation h2 { font-size: 21px; margin: 0 0 6px; }
+        #cashflowReconciliation h3 { font-size: 16px; margin: 0; }
+        #cashflowReconciliation h4 { font-size: 14px; margin: 12px 0 6px; }
+        #cashflowReconciliation p { margin: 6px 0; }
+        #cashflowReconciliation .recon-muted { color: #64748b; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+        #cashflowReconciliation .recon-toolbar { position: sticky; top: 72.5px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 14px; border-block: 1px solid #e2e8f0; background: #f8fafc; }
+        #cashflowReconciliation .recon-toolbar button { padding: 8px; font-size: 12px; white-space: nowrap; }
+        #cashflowReconciliation .recon-toolbar > * { flex-shrink: 0; }
+        #cashflowReconciliation .recon-report-period { min-width: 0; font-size: 13px; line-height: 1.5; }
+        #cashflowReconciliation .recon-report-period strong { display: block; font-weight: 600; overflow-wrap: anywhere; }
+        #cashflowReconciliation .recon-period-note { display: block; color: #64748b; font-size: 11px; }
+        #cashflowReconciliation .recon-return { margin-left: auto; white-space: nowrap; }
+        #cashflowReconciliation label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+        #cashflowReconciliation select { max-width: 100%; padding: 7px; border: 1px solid #cbd5e1; border-radius: 5px; background: white; }
+        #cashflowReconciliation .recon-tabs { display: flex; gap: 4px; padding: 0; }
+        #cashflowReconciliation [role=tab][aria-selected=true] { background: #24536e; color: #fff; border-color: #24536e; }
+        #cashflowReconciliation button:focus-visible, #cashflowReconciliation select:focus-visible, #cashflowReconciliation summary:focus-visible { outline: 2px solid #24536e; outline-offset: 3px; }
+        #cashflowReconciliation .recon-body { padding: 16px 24px 24px; }
+        #cashflowReconciliation .recon-status { padding: 12px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; line-height: 1.6; font-size: 13px; }
+        #cashflowReconciliation .recon-status.is-error { border-color: #dc2626; background: #fef2f2; }
+        .cashflow-coverage-alert { box-sizing: border-box; margin: 8px 12px; padding: 9px 12px; border: 1px solid #e8c878; border-radius: 6px; background: #fff8e7; color: #5f4a18; font-size: 13px; line-height: 1.5; }
+        .cashflow-coverage-alert[hidden] { display: none !important; }
+        #cashflowReconciliationCoverageAlert { margin: 12px 24px 0; }
+        #cashflowReconciliation .recon-loading-panel { padding: 20px; border: 1px solid #cbd5e1; border-radius: 8px; background: #f8fafc; }
+        #cashflowReconciliation .recon-loading-title { margin: 0 0 14px; font-size: 17px; color: #24536e; }
+        #cashflowReconciliation .recon-loading-skeleton { margin-top: 20px; }
+        #cashflowReconciliation .recon-export-actions { margin-top: 14px; }
+        #cashflowReconciliation #reconExportProcessing { margin-bottom: 12px; }
+        #cashflowReconciliation #reconProcessing .recon-loading-panel { max-width: 720px; margin: 24px auto; min-height: 280px; }
+        #cashflowReconciliation .recon-evidence, #cashflowReconciliation [id^='recon'] { scroll-margin-top: 160px; }
+        #cashflowReconciliation .recon-section { margin-top: 18px; border: 1px solid #d6dee8; border-radius: 7px; overflow: hidden; }
+        #cashflowReconciliation #reconWorking > .recon-section:first-child { margin-top: 0; }
+        #cashflowReconciliation .recon-section > h3 { padding: 12px 14px; background: #edf1f7; }
+        #cashflowReconciliation table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        #cashflowReconciliation th, #cashflowReconciliation td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #e2e8f0; vertical-align: top; overflow-wrap: anywhere; }
+        #cashflowReconciliation th { color: #64748b; font-weight: 600; }
+        #cashflowReconciliation .recon-money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; width: 180px; }
+        #cashflowReconciliation .recon-total { background: #f8fafc; font-weight: 600; }
+        #cashflowReconciliation .recon-difference { background: #e2efda; font-weight: 700; }
+        #cashflowReconciliation .recon-difference.needs-review { background: #fff7ed; }
+        #cashflowReconciliation .recon-adjustment { border: 0; background: none; color: #24536e; text-decoration: underline; text-underline-offset: 3px; padding: 0; text-align: left; cursor: pointer; font: inherit; }
+        #cashflowReconciliation .recon-adjustment-cell { padding: 0; }
+        #cashflowReconciliation .recon-adjustment-group { margin: 0; padding: 0; border: 0; border-radius: 0; }
+        #cashflowReconciliation .recon-adjustment-group > summary { padding: 10px 14px; display: flex; justify-content: space-between; gap: 16px; background: #f8fafc; }
+        #cashflowReconciliation .recon-adjustment-group > summary::before { content: '▸'; }
+        #cashflowReconciliation .recon-adjustment-group[open] > summary::before { content: '▾'; }
+        #cashflowReconciliation .recon-adjustment-group > summary span:first-of-type { flex: 1; }
+        #cashflowReconciliation .recon-adjustment-group table td:first-child { padding-left: 34px; }
+        #reconCompletenessDialog { width: min(950px, 96vw); max-width: 96vw; max-height: 88vh; margin: auto; padding: 0; border: 1px solid #cbd5e1; border-radius: 10px; color: #1a1a2e; background: white; box-shadow: 0 20px 60px #0003; }
+        #reconCompletenessDialog::backdrop { background: #0f172a80; }
+        #reconCompletenessDialog .recon-completeness-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 18px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }
+        #reconCompletenessDialog .recon-completeness-content { padding: 14px 18px; }
+        #reconCompletenessDialog .recon-completeness-table { min-width: 660px; }
+        #reconCompletenessDialog .recon-completeness-table td:first-child, #reconCompletenessDialog .recon-completeness-table th:first-child { width: 40%; }
+        #reconCompletenessDialog .recon-completeness-table .recon-money { width: auto; }
+        #reconCompletenessDialog #reconCompletenessAdjustmentRows td:first-child { padding-left: 26px; }
+        #reconCompletenessDialog .recon-completeness-message { margin: 0 0 12px; padding: 9px 12px; background: #fff7ed; border-radius: 5px; }
+        #reconCompletenessDialog button:focus-visible { outline: 2px solid #24536e; outline-offset: 2px; }
+        #reconAdjustmentDialog { width: min(1400px, 96vw); max-width: 96vw; max-height: 88vh; margin: auto; inset: 0; padding: 0; border: 1px solid #cbd5e1; border-radius: 10px; color: #1a1a2e; box-shadow: 0 20px 60px #0003; }
+        #reconAdjustmentDialog[open] { display: flex; flex-direction: column; }
+        #reconAdjustmentDialog::backdrop { background: #0f172a80; }
+        #reconAdjustmentDialog .recon-popup-header, #reconAdjustmentDialog .recon-popup-controls { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding: 14px 18px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; flex-wrap: wrap; }
+        #reconAdjustmentDialog h3 { margin: 0; font-size: 17px; }
+        #reconAdjustmentDialog .recon-popup-header > div { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+        #reconAdjustmentDialog .recon-popup-context { color: #64748b; font-size: 12px; margin-top: 6px; }
+        #reconAdjustmentDialog .recon-popup-controls { justify-content: flex-start; gap: 10px; padding: 12px 18px; }
+        #reconAdjustmentDialog .recon-popup-controls button { padding: 8px 10px; font-size: 12px; white-space: nowrap; }
+        #reconAdjustmentDialog label { display: flex; gap: 7px; align-items: center; min-width: 0; font-size: 12px; }
+        #reconAdjustmentSearch { width: 180px; }
+        #reconAdjustmentDialog .recon-popup-paging { display: flex; align-items: center; gap: 10px; margin-left: auto; font-size: 12px; white-space: nowrap; }
+        #reconAdjustmentDialog input, #reconAdjustmentDialog select { padding: 7px; border: 1px solid #cbd5e1; border-radius: 5px; max-width: 100%; }
+        #reconAdjustmentDialog #reconSupport { margin: 0; border: 0; border-radius: 0; padding: 14px 18px; overflow: auto; min-height: 130px; min-width: 0; }
+        #reconAdjustmentDialog .recon-flat-table { width: max-content; min-width: 100%; background: #fff; }
+        #reconAdjustmentDialog .recon-flat-table td, #reconAdjustmentDialog .recon-flat-table th { white-space: nowrap; overflow-wrap: normal; }
+        #reconAdjustmentDialog .recon-flat-table .source-narrative { white-space: pre-wrap; min-width: 280px; max-width: 420px; overflow-wrap: anywhere; }
+        #reconAdjustmentDialog .recon-flat-table .source-number { text-align: right; font-variant-numeric: tabular-nums; }
+        #reconAdjustmentDialog .recon-flat-table .context-only { color: #64748b; background: #f8fafc; }
+        #reconAdjustmentDialog button:focus-visible, #reconAdjustmentDialog input:focus-visible, #reconAdjustmentDialog select:focus-visible { outline: 2px solid #24536e; outline-offset: 2px; }
+        #cashflowReconciliation .recon-evidence { margin-top: 18px; padding: 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 7px; }
+        #cashflowReconciliation .recon-evidence-head, #cashflowReconciliation .recon-paging { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-block: 10px; }
+        #cashflowReconciliation .recon-table-wrap { overflow-x: auto; max-width: 100%; }
+        #cashflowReconciliation .recon-source-table { min-width: 980px; background: #fff; font-size: 12px; }
+        #cashflowReconciliation .recon-source-table td, #cashflowReconciliation .recon-source-table th { padding: 8px; }
+        #cashflowReconciliation details { margin-top: 12px; border: 1px solid #cbd5e1; padding: 10px; border-radius: 5px; background: #fff; }
+        #cashflowReconciliation summary { cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+        @media (max-width: 600px) {
+            #cashflowReconciliation .recon-toolbar, #cashflowReconciliation .recon-body { padding: 12px; }
+            #cashflowReconciliation .recon-tabs { flex-wrap: wrap; }
+            #cashflowReconciliation .recon-toolbar > * { max-width: 100%; }
+            #reconAdjustmentDialog .recon-popup-controls { padding: 12px; }
+            #reconAdjustmentDialog .recon-popup-paging { flex-wrap: wrap; margin-left: 0; white-space: normal; }
+            #reconAdjustmentPage { max-width: 165px; }
+            #cashflowReconciliation .recon-money { width: auto; }
+            #cashflowReconciliation th, #cashflowReconciliation td { padding: 9px 8px; }
+            #cashflowReconciliation label { flex-wrap: wrap; }
+            #cashflowReconciliationCoverageAlert { margin-inline: 12px; }
+        }
+    </style>
+</head>
+<body class='reconciliation-page' data-nav-module='Reports' data-nav-parent='index.html'>
+    <nav class='navbar'>
+        <div class='nav-container'>
+            <div id='navLeft'></div>
+            <div class='nav-client' id='clientControl'></div>
+            <div class='nav-user'></div>
+        </div>
+    </nav>
+    <main class='reconciliation-shell'>
+        <section id='reportsView' aria-labelledby='reports-heading'>
+            <section class='hub-group' aria-labelledby='reports-heading'>
+                <h2 id='reports-heading' class='hub-group-title'>Available reports</h2>
+                <div class='module-grid'>
+                    <div id='cashflowsCard' class='module-card' data-report-key='cashflows' role='button' tabindex='0' aria-label='Open Cashflows report'>
+                        <div class='module-icon' aria-hidden='true'>CF</div>
+                        <h3>Cashflows</h3>
+                        <p>Summarise money in, money out, transfers, and closing cash and bank balances.</p>
+                        <span id='cashflowsStatus' class='module-status'>Next build</span>
+                    </div>
+                    <div id='financialStatementsCard' class='module-card' data-report-key='financial-statements' role='button' tabindex='0' aria-label='Open Financial Statements'>
+                        <div class='module-icon' aria-hidden='true'>FS</div>
+                        <h3>Financial Statements</h3>
+                        <p>Prepare the current-period Balance Sheet.</p>
+                        <span class='module-status'>Draft accounts</span>
+                    </div>
+                </div>
+            </section>
+            <section class='hub-group' aria-labelledby='planned-reports-heading'>
+                <h2 id='planned-reports-heading' class='hub-group-title'>Planned reports</h2>
+                <div class='module-grid'>
+                    <div class='module-card coming-soon' aria-label='Vendor Reports coming soon'>
+                        <div class='module-icon' aria-hidden='true'>VR</div>
+                        <h3>Vendor Reports</h3>
+                        <p>Review vendor payments, balances, and supporting movement summaries.</p>
+                        <span class='module-status coming'>Coming soon</span>
+                    </div>
+                    <div class='module-card coming-soon' aria-label='Customer Reports coming soon'>
+                        <div class='module-icon' aria-hidden='true'>CR</div>
+                        <h3>Customer Reports</h3>
+                        <p>Review customer receipts, deductions, balances, and collection movements.</p>
+                        <span class='module-status coming'>Coming soon</span>
+                    </div>
+                </div>
+            </section>
+        </section>
+        <section id='financialStatementsView' aria-labelledby='financialStatementsHeading' hidden>
+            <header class='balance-sheet-toolbar'><h2 id='financialStatementsHeading' tabindex='-1'>Financial Statements</h2><button type='button' id='financialStatementsBack' class='cashflows-secondary'>Reports</button></header>
+            <div class='module-grid'>
+                <div id='balanceSheetCard' class='module-card' data-report-key='balance-sheet' role='button' tabindex='0' aria-label='Open Balance Sheet'>
+                    <div class='module-icon' aria-hidden='true'>BS</div><h3>Balance Sheet</h3><p>ERP closing balances linked through Account Control Centre.</p><span class='module-status'>Draft accounts</span>
+                </div>
+                <div id='incomeStatementCard' class='module-card' data-report-key='income-statement' role='button' tabindex='0' aria-label='Open Income Statement'>
+                    <div class='module-icon' aria-hidden='true'>IS</div><h3>Income Statement</h3><p>Statement of profit or loss from the selected Trial Balance.</p><span class='module-status'>Draft accounts</span>
+                </div>
+            </div>
+        </section>
+        <section id='balanceSheetView' aria-labelledby='balanceSheetHeading' hidden>
+            <header id='balanceSheetToolbar' class='balance-sheet-toolbar'>
+                <div class='balance-sheet-title-row'><h2 id='balanceSheetHeading' tabindex='-1'></h2></div>
+                <div class='balance-sheet-meta-row'>
+                    <div class='balance-sheet-meta-left'>
+                        <span id='balanceSheetDate'>Period:</span>
+                        <select id='balanceSheetUpload' aria-label='Select Trial Balance period'><option value=''>Select period</option></select>
+                        <button type='button' id='balanceSheetDiagnosticsOpen' class='balance-sheet-icon-button' aria-label='Open Balance Sheet review items' title='Review items' aria-haspopup='dialog' aria-expanded='false' aria-controls='balanceSheetDiagnosticsDialog' hidden>
+                            <svg viewBox='0 0 24 24' aria-hidden='true'><path d='M8 4.5h8a2 2 0 0 1 2 2v13H6v-13a2 2 0 0 1 2-2Z'/><path d='M9 3.5h6v3H9zM9 11h6M9 15h6'/><path d='m8 11 .7.7L10 10.5M8 15l.7.7L10 14.5'/></svg>
+                        </button>
+                    </div>
+                    <div class='balance-sheet-actions'>
+                        <button type='button' id='statementClosingOpen' class='balance-sheet-icon-button' aria-label='Edit profit closing status' title='Profit closing status' aria-haspopup='dialog' aria-expanded='false' aria-controls='statementClosingDialog' hidden>
+                            <svg viewBox='0 0 24 24' aria-hidden='true'><path d='M7 5.5h10a2 2 0 0 1 2 2v12H5v-12a2 2 0 0 1 2-2Z'/><path d='M9 3.5h6v4H9zM8.5 12h7M8.5 16h4'/><path d='m15.5 16 1.2 1.2 2.3-2.5'/></svg>
+                        </button>
+                        <button type='button' id='balanceSheetNotesOpen' class='cashflows-secondary' hidden>Notes to Balance Sheet</button>
+                        <button type='button' id='incomeStatementNotesOpen' class='cashflows-secondary' hidden>Notes to Income Statement</button>
+                        <button type='button' id='balanceSheetIncomeStatementShortcut' class='cashflows-secondary' aria-label='Open Income Statement' title='Open Income Statement' hidden>Income Statement</button>
+                        <button type='button' id='incomeStatementBalanceSheetShortcut' class='cashflows-secondary' aria-label='Open Balance Sheet' title='Open Balance Sheet' hidden>Balance Sheet</button>
+                        <button type='button' id='balanceSheetReload' class='cashflows-secondary'>Reload Balance Sheet</button>
+                        <button type='button' id='balanceSheetBack' class='cashflows-secondary'>Financial Statements</button>
+                    </div>
+                </div>
+            </header>
+            <dialog id='balanceSheetDiagnosticsDialog' aria-labelledby='balanceSheetDiagnosticsHeading' hidden>
+                <div class='statement-dialog-header'><div><h3 id='balanceSheetDiagnosticsHeading'>Balance Sheet review items</h3><p>Source checks and items that need review.</p></div><button type='button' class='statement-dialog-close' data-statement-dialog-close aria-label='Close review items'>×</button></div>
+                <div class='statement-dialog-body'>
+                    <section class='review-table-section' aria-labelledby='balanceSheetDiagnosticChecksHeading'>
+                        <h4 id='balanceSheetDiagnosticChecksHeading'>Balance checks</h4>
+                        <div class='review-table-wrap'><table class='statement-reconciliation-table review-check-table' aria-label='Balance checks and differences'><thead><tr><th scope='col'>Check</th><th scope='col' class='reconciliation-number'>Debit / source</th><th scope='col' class='reconciliation-number'>Credit / comparison</th><th scope='col' class='reconciliation-number'>Difference</th></tr></thead><tbody id='balanceSheetDiagnosticChecks'></tbody></table></div>
+                    </section>
+                    <section class='review-table-section' aria-labelledby='balanceSheetDiagnosticsItemsHeading'>
+                        <h4 id='balanceSheetDiagnosticsItemsHeading'>Items needing review</h4>
+                        <div class='review-table-wrap'><table class='statement-reconciliation-table review-items-table' aria-label='Items needing review'><thead><tr><th scope='col'>Item</th><th scope='col'>Details</th></tr></thead><tbody id='balanceSheetDiagnostics'></tbody></table></div>
+                    </section>
+                </div>
+            </dialog>
+            <dialog id='statementClosingDialog' aria-labelledby='statementClosingHeading' hidden>
+                <div class='statement-dialog-header'><div><h3 id='statementClosingHeading'>Profit closing status</h3><p>Confirm whether this Trial Balance’s profit is already included in ERP capital.</p></div><button type='button' class='statement-dialog-close' data-statement-dialog-close aria-label='Close profit closing status'>×</button></div>
+                <div class='statement-dialog-body'><div id='statementClosingControls' hidden><label for='statementClosingStatus'>Profit closing status for this Trial Balance</label><select id='statementClosingStatus'><option value='not_confirmed'>Not confirmed</option><option value='not_in_capital' selected>Profit is not yet included in ERP capital</option><option value='already_in_capital'>Profit is already included in ERP capital</option></select><button type='button' id='statementClosingSave' class='cashflows-secondary'>Save closing status</button></div></div>
+            </dialog>
+            <article class='balance-sheet-paper'>
+                <p id='balanceSheetStatus' role='status' aria-live='polite'></p>
+                <div class='balance-sheet-table-wrap'><table id='balanceSheetTable' aria-label='Draft Balance Sheet before audit adjustments' hidden><thead><tr><th scope='col'>Particulars</th><th scope='col' id='statementNoteHeader'>Note</th><th scope='col' id='statementCurrentHeader' class='balance-sheet-amount'>Current period</th><th scope='col' id='statementComparativeHeader' class='balance-sheet-amount' hidden>Comparative</th></tr></thead><tbody id='balanceSheetRows'></tbody></table></div>
+                <details id='balanceSheetReconciliation' class='statement-reconciliation' data-state='not_reconciled' hidden>
+                    <summary id='statementReconciliationSummary'>Not reconciled</summary>
+                    <div class='statement-reconciliation-body'>
+                        <p id='statementReconciliationContext'></p>
+                        <div class='balance-sheet-table-wrap'><table id='statementReconciliationTable' class='statement-reconciliation-table' aria-label='Trial Balance to Balance Sheet comparison'><thead><tr><th scope='col'>Particulars</th><th scope='col' class='reconciliation-number'>As per TB</th><th scope='col' class='reconciliation-number'>As per BS</th></tr></thead><tbody id='statementReconciliationRows'></tbody></table></div>
+                        <ul id='statementReconciliationIssues' class='statement-reconciliation-issues'></ul>
+                        <p>Debit balances are positive; credit balances are in parentheses. Comparison only: no balancing entry is posted. Exact amounts are used, with a tolerance of 0.01.</p>
+                    </div>
+                </details>
+                <details id='openingBalanceSheetReconciliation' class='statement-reconciliation' data-state='not_reconciled' hidden>
+                    <summary id='openingStatementReconciliationSummary'>Not reconciled</summary>
+                    <div class='statement-reconciliation-body'>
+                        <p id='openingStatementReconciliationContext'></p>
+                        <div class='balance-sheet-table-wrap'><table id='openingStatementReconciliationTable' class='statement-reconciliation-table' aria-label='Opening Trial Balance to comparative Balance Sheet comparison'><thead><tr><th scope='col'>Particulars</th><th scope='col' class='reconciliation-number'>As per TB</th><th scope='col' class='reconciliation-number'>As per BS</th></tr></thead><tbody id='openingStatementReconciliationRows'></tbody></table></div>
+                        <ul id='openingStatementReconciliationIssues' class='statement-reconciliation-issues'></ul>
+                        <p>Debit balances are positive; credit balances are in parentheses. Comparison only: no balancing entry is posted. Exact amounts are used, with a tolerance of 0.01.</p>
+                    </div>
+                </details>
+            </article>
+        </section>
+        <section id='balanceSheetNotesView' aria-labelledby='balanceSheetNotesHeading' hidden>
+            <header id='balanceSheetNotesToolbar' class='statement-notes-toolbar'>
+                <div class='statement-notes-title-row'><h2 id='balanceSheetNotesHeading' tabindex='-1'>Notes to Balance Sheet</h2></div>
+                <div class='statement-notes-meta-row'><div class='statement-notes-meta-left'><span class='statement-notes-period-label'>Period:</span><span id='balanceSheetNotesPeriod' class='statement-notes-period-value'>Loading…</span></div><div class='balance-sheet-actions statement-notes-actions'><button type='button' id='balanceSheetNotesBack' class='cashflows-secondary'>Balance Sheet</button><button type='button' id='balanceSheetNotesFinancialStatements' class='cashflows-secondary'>Financial Statements</button></div></div>
+            </header>
+            <article class='balance-sheet-paper'>
+                <p id='balanceSheetNotesStatus' role='status' aria-live='polite'></p>
+                <div class='balance-sheet-notes-table-wrap'><table id='balanceSheetNotesTable' aria-label='Balance Sheet notes' hidden><thead><tr><th scope='col'>Note</th><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount' id='balanceSheetNotesCurrentHeader'>Current</th><th scope='col' class='balance-sheet-amount' id='balanceSheetNotesComparativeHeader'>Comparative</th></tr></thead><tbody id='balanceSheetNotesRows'></tbody></table></div>
+                <section id='balanceSheetNotesCoverage' aria-labelledby='balanceSheetNotesCoverageHeading' hidden><h3 id='balanceSheetNotesCoverageHeading'>Note coverage review</h3><p>Differences compare each Balance Sheet category with the balances assigned to its linked note. They are review items and are not adjusted.</p><div class='balance-sheet-notes-table-wrap'><table id='balanceSheetNotesCoverageTable' aria-label='Note coverage against Balance Sheet categories'><thead><tr><th scope='col'>Balance Sheet category</th><th scope='col' class='balance-sheet-amount'>Accounts without a note</th><th scope='col' class='balance-sheet-amount'>Current difference</th><th scope='col' class='balance-sheet-amount'>Comparative difference</th></tr></thead><tbody id='balanceSheetNotesCoverageRows'></tbody></table></div></section>
+            </article>
+        </section>
+        <section id='incomeStatementNotesView' aria-labelledby='incomeStatementNotesHeading' hidden>
+            <header id='incomeStatementNotesToolbar' class='statement-notes-toolbar'>
+                <div class='statement-notes-title-row'><h2 id='incomeStatementNotesHeading' tabindex='-1'>Notes to Income Statement</h2></div>
+                <div class='statement-notes-meta-row'><div class='statement-notes-meta-left'><span class='statement-notes-period-label'>Period:</span><span id='incomeStatementNotesPeriod' class='statement-notes-period-value'>Loading…</span></div><div class='balance-sheet-actions statement-notes-actions'><button type='button' id='incomeStatementNotesBack' class='cashflows-secondary'>Income Statement</button><button type='button' id='incomeStatementNotesFinancialStatements' class='cashflows-secondary'>Financial Statements</button></div></div>
+            </header>
+            <article class='balance-sheet-paper'>
+                <p id='incomeStatementNotesStatus' role='status' aria-live='polite'></p>
+                <div class='balance-sheet-notes-table-wrap'><table id='incomeStatementNotesTable' aria-label='Income Statement notes' hidden><thead><tr><th scope='col'>Note</th><th scope='col'>Particulars</th><th scope='col' class='balance-sheet-amount' id='incomeStatementNotesCurrentHeader'>Statement amount</th></tr></thead><tbody id='incomeStatementNotesRows'></tbody></table></div>
+                <section id='incomeStatementNotesCoverage' aria-labelledby='incomeStatementNotesCoverageHeading' hidden><h3 id='incomeStatementNotesCoverageHeading'>Note coverage review</h3><p>Notes show the selected category's normal balance as positive: Income is credit-normal and Expense is debit-normal. Reversals are negative. Differences are review items and are not adjusted.</p><div class='balance-sheet-notes-table-wrap'><table id='incomeStatementNotesCoverageTable' aria-label='Note coverage against Income Statement categories'><thead><tr><th scope='col'>Income Statement category</th><th scope='col' class='balance-sheet-amount'>Accounts without a note</th><th scope='col' class='balance-sheet-amount'>Difference (normal balance positive)</th></tr></thead><tbody id='incomeStatementNotesCoverageRows'></tbody></table></div></section>
+            </article>
+        </section>
+        <section id='cashflowsView' class='cashflows-report' aria-label='Cashflows report' hidden>
+        <div class='cashflows-notification-stack'>
+            <div id='cashflowsFreshnessAlert' class='cashflows-freshness-alert' role='status' aria-live='polite' hidden><span id='cashflowsFreshnessStatus'></span><button type='button' id='cashflowsFreshnessAlertClose' class='cashflows-freshness-alert-close' aria-label='Dismiss snapshot status'>&times;</button></div>
+            <div id='cashflowsLedgerCoverageAlert' class='cashflow-coverage-alert' role='status' aria-live='polite' hidden></div>
+            <div id='cashflowsToast' class='cashflows-toast' role='status' aria-live='polite' hidden></div>
+        </div>
+    <div id='cashflowsSummaryControlsPanel' class='cashflows-report-header'>
+        <div id='cashflowsCategoryBuildStatus' class='cashflows-category-build-status' role='status' aria-live='polite' hidden></div>
+        <form id='cashflowsReportForm' class='cashflows-filter-bar'>
+            <div class='cashflows-report-scope' role='group' aria-label='Cashflows report scope'>
+                <label class='cashflows-grouping-control' for='cashflowsGroupingSelect'>Group by<select id='cashflowsGroupingSelect' aria-label='Cashflows report grouping'><option value='suggested'>Suggested</option><option value='day'>Daily</option><option value='fortnight'>Fortnightly</option><option value='month'>Monthly</option><option value='quarter'>Quarterly</option><option value='half_year'>Half-yearly</option><option value='year'>Annually</option></select></label>
+                <label class='cashflows-treasury-control' for='cashflowsTreasuryViewSelect'>Treasury view<select id='cashflowsTreasuryViewSelect' aria-label='Cashflows treasury view'><option value='combined'>Cash and Bank Total</option><option value='bank'>Bank only</option><option value='cash'>Cash only</option><option value='split'>Cash and Bank individually</option></select></label>
+                <div class='cashflows-period-control'>
+                    <span class='cashflows-control-label'>Period</span>
+                    <button type='button' id='cashflowsPeriodButton' class='cashflows-period-button' aria-haspopup='dialog' aria-expanded='false'>Select period</button>
+                    <div id='cashflowsPeriodPopover' class='cashflows-period-popover' role='dialog' aria-label='Cashflows reporting period' hidden>
+                        <div class='cashflows-period-group'><span class='cashflows-period-label'>Quick period</span><div class='cashflows-period-chips'>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='this_month'>This month</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='this_quarter'>This quarter</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='ytd'>YTD</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='this_year'>This year</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='last_year'>Last year</button>
+                            <button type='button' class='cashflows-period-chip' data-quick-period='monthly'>Monthly</button>
+                        </div></div>
+                        <div class='cashflows-period-group'><span class='cashflows-period-label'>Pick by</span><div class='cashflows-period-chips'>
+                            <button type='button' class='cashflows-period-chip' data-period-type='day'>Day</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='fortnight'>Fortnight</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='month'>Month</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='quarter'>Quarter</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='half_year'>Half-year</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='year'>Year</button>
+                            <button type='button' class='cashflows-period-chip' data-period-type='custom'>Custom range</button>
+                        </div></div>
+                        <div id='cashflowsPeriodPicker' class='cashflows-period-picker' hidden></div>
+                        <div id='cashflowsPeriodFooter' class='cashflows-period-footer' hidden><button type='button' id='cashflowsPeriodCancel' class='cashflows-secondary'>Cancel</button><button type='button' id='cashflowsPeriodApply' class='cashflows-primary'>Apply</button></div>
+                    </div>
+                </div>
+                <input id='cashflowsPeriodStart' type='date' required hidden>
+                <input id='cashflowsPeriodEnd' type='date' required hidden>
+                <div class='cashflows-account-control'>
+                    <span class='cashflows-control-label' id='cashflowsAccountLabel'>Cash/Bank a/c</span>
+                    <button type='button' id='cashflowsAccountButton' aria-labelledby='cashflowsAccountLabel cashflowsAccountValue' aria-haspopup='dialog' aria-expanded='false' aria-controls='cashflowsAccountPopover'><span id='cashflowsAccountValue'>All accounts</span><span aria-hidden='true'>▾</span></button>
+                    <div id='cashflowsAccountPopover' role='dialog' aria-labelledby='cashflowsAccountLabel' hidden>
+                        <strong>Select Cash/Bank accounts</strong>
+                        <input id='cashflowsAccountSearch' type='search' placeholder='Search account name or code' aria-label='Search Cash/Bank accounts' autocomplete='off'>
+                        <label class='account-option'><input id='cashflowsAccountAll' type='checkbox' checked><span>All eligible accounts<span class='account-code'>Current Treasury view</span></span></label>
+                        <div id='cashflowsAccountStatus' role='status' aria-live='polite'></div>
+                        <button type='button' id='cashflowsAccountRetry' class='cashflows-secondary' hidden>Retry accounts</button>
+                        <div id='cashflowsAccountOptions'></div>
+                        <div class='account-picker-footer'><button type='button' id='cashflowsAccountClear' class='cashflows-secondary'>Clear</button><span id='cashflowsAccountHint'>Apply with Load summary</span><button type='button' id='cashflowsAccountDone' class='cashflows-secondary'>Done</button></div>
+                    </div>
+                </div>
+                <div class='cashflows-load-actions'>
+                    <button type='submit' class='cashflows-primary'>Load summary</button>
+                    <div class='cashflows-refresh-menu'>
+                        <button type='button' id='cashflowsRefreshMenuButton' class='cashflows-primary cashflows-split-toggle' aria-haspopup='menu' aria-expanded='false' aria-controls='cashflowsRefreshMenu' aria-label='More load options'>&#9662;</button>
+                        <div id='cashflowsRefreshMenu' class='cashflows-refresh-menu-popover' role='menu' hidden>
+                            <button type='button' id='cashflowsRefreshButton' class='cashflows-refresh-menu-item' role='menuitem'>Refresh from source</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class='cashflows-report-actions'>
+                        <button type='button' id='cashflowsLedgerDrilldownButton' class='cashflows-secondary' hidden>Ledger drill-down</button>
+                        <button type='button' id='cashflowsReconciliationButton' class='cashflows-secondary' hidden>Reconciliation</button>
+                <button type='button' id='cashflowsHideZeroRowsButton' class='cashflows-secondary' disabled>Hide zero rows</button>
+                <button type='button' id='cashflowsExportButton' class='cashflows-secondary cashflows-export-button' hidden>XLSX</button>
+            </div>
+        </form>
+    </div>
+    <section class='cashflows-report-section'><div class='cashflows-summary-tools'><div class='cashflows-search-control'><input id='cashflowsSummaryFilter' type='text' placeholder='Filter category' aria-label='Filter Cashflows categories'><button type='button' id='cashflowsSummaryClear' class='cashflows-search-clear' aria-label='Clear category filter' title='Clear category filter' hidden>×</button></div></div><div class='cashflows-table-wrap cashflows-summary-table-wrap'><div id='cashflowsSummaryTable' class='cashflows-summary-table-host'></div></div></section>
+            <div id='cashflowsLazyActions' class='cashflows-lazy-actions'>
+                <div class='cashflows-detail-actions'>
+                    <button type='button' id='cashflowsLoadTransfersButton' class='cashflows-secondary'>Load internal transfers</button>
+                    <button type='button' id='cashflowsLoadCustomerPaymentsButton' class='cashflows-secondary'>Load customer payments</button>
+                    <button type='button' id='cashflowsLoadVendorPaymentsButton' class='cashflows-secondary'>Load vendor payments</button>
+                    <button type='button' id='cashflowsLoadDeductionsButton' class='cashflows-secondary'>Load customer deductions</button>
+                    <button type='button' id='cashflowsLoadReviewButton' class='cashflows-secondary'>Load review required</button>
+                </div>
+                <button type='button' id='cashflowsViewTransactionsButton' class='cashflows-secondary' hidden>View classified transactions</button>
+            </div>
+            <div id='cashflowsMainDetailAnchor' class='cashflows-layout-anchor' aria-hidden='true'></div>
+            <div id='cashflowsDetailResults' class='cashflows-detail-results'>
+            <div class='cashflows-detail-grid'>
+                <section id='cashflowsTransfersSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Internal transfers</h3><span id='cashflowsTransferCount'></span></div><div id='cashflowsTransferReconciliation' class='cashflows-transfer-reconciliation' hidden aria-live='polite'></div><div class='cashflows-detail-search-toolbar'><input id='cashflowsTransfersSearch' class='cashflows-detail-search-input' type='search' placeholder='Search any value in any column' aria-label='Search internal transfers by any column' autocomplete='off'><button type='button' id='cashflowsTransfersSearchClear' class='cashflows-secondary'>Clear</button></div><div class='cashflows-table-wrap'><table id='cashflowsTransfersTable' class='cashflows-table'></table></div></section>
+                <section id='cashflowsCustomerPaymentsSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3 id='cashflowsCustomerPaymentsHeading'>Customer payments</h3><span id='cashflowsCustomerPaymentCount'></span></div><div class='cashflows-detail-search-toolbar cashflows-customer-payments-toolbar'><input id='cashflowsCustomerPaymentsSearch' class='cashflows-detail-search-input' type='search' placeholder='Search any value in any column' aria-label='Search customer payments by any column' autocomplete='off'><input id='cashflowsCustomerPaymentsCustomerSearch' class='cashflows-detail-search-input' list='cashflowsCustomerPaymentsCustomerOptions' type='search' placeholder='Search Customer' aria-label='Search customer for customer-wise view' autocomplete='off'><datalist id='cashflowsCustomerPaymentsCustomerOptions'></datalist><button type='button' id='cashflowsCustomerPaymentsPeriodWiseButton' class='cashflows-secondary'>Period-wise</button><button type='button' id='cashflowsCustomerPaymentsCustomerWiseButton' class='cashflows-secondary'>Customer-wise</button><button type='button' id='cashflowsCustomerPaymentsSearchClear' class='cashflows-secondary'>Clear</button></div><div id='cashflowsCustomerPaymentsVoucherPanel'><div class='cashflows-table-wrap'><table id='cashflowsCustomerPaymentsTable' class='cashflows-table cashflows-customer-payments-table'></table></div></div><div id='cashflowsCustomerWisePanel' class='cashflows-transfer-reconciliation cashflows-customer-wise-panel' hidden><div class='cashflows-transfer-reconciliation-heading'><strong>Customer-wise reconciliation</strong><span id='cashflowsCustomerWiseStatus' class='cashflows-transfer-status'></span></div><div id='cashflowsCustomerWiseReconciliation' class='cashflows-transfer-metrics'></div><div class='cashflows-table-wrap'><table id='cashflowsCustomerWiseTable' class='cashflows-table cashflows-customer-wise-table'></table></div></div><div id='cashflowsCustomerPeriodWisePanel' class='cashflows-transfer-reconciliation cashflows-customer-wise-panel' hidden><div class='cashflows-transfer-reconciliation-heading'><strong>Period-wise customer-payment reconciliation</strong><span id='cashflowsCustomerPeriodWiseStatus' class='cashflows-transfer-status'></span></div><div id='cashflowsCustomerPeriodWiseReconciliation' class='cashflows-transfer-metrics'></div><div class='cashflows-table-wrap'><table id='cashflowsCustomerPeriodWiseTable' class='cashflows-table cashflows-customer-wise-table'></table></div></div></section>
+                <section id='cashflowsVendorPaymentsSection' class='cashflows-report-section' hidden>
+                    <div class='cashflows-section-heading'><h3>Vendor payments and refunds</h3><span id='cashflowsVendorPaymentCount'></span></div>
+                    <div class='cashflows-detail-search-toolbar'>
+                        <input id='cashflowsVendorPaymentsSearch' class='cashflows-detail-search-input' type='search' list='cashflowsVendorOptions' placeholder='Search vendor or any column' aria-label='Search vendor payments' autocomplete='off'><datalist id='cashflowsVendorOptions'></datalist>
+                        <select id='cashflowsVendorView' class='cashflows-secondary' aria-label='Vendor detail view'><option value='period'>Period-wise</option><option value='vendor'>Vendor-wise</option><option value='transactions'>Transactions</option></select>
+                        <button type='button' id='cashflowsVendorPaymentsClear' class='cashflows-secondary'>Clear</button>
+                        <a class='cashflows-secondary' href='/static/account_control_center.html'>Vendor account settings</a>
+                    </div>
+                    <p>Uses Local Vendor and Import Vendor accounts assigned in Account Control Centre. Transaction amounts and dates remain as posted.</p>
+                    <div class='cashflows-table-wrap'><table id='cashflowsVendorPaymentsTable' class='cashflows-table'></table></div>
+                </section>
+                <section id='cashflowsDeductionsSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Customer deductions</h3><span id='cashflowsDeductionCount'></span></div><div class='cashflows-detail-search-toolbar'><input id='cashflowsDeductionsSearch' class='cashflows-detail-search-input' type='search' placeholder='Search any value in any column' aria-label='Search customer deductions by any column' autocomplete='off'><button type='button' id='cashflowsDeductionsSearchClear' class='cashflows-secondary'>Clear</button></div><div class='cashflows-table-wrap'><table id='cashflowsDeductionsTable' class='cashflows-table'></table></div></section>
+            </div>
+            <section id='cashflowsReviewSection' class='cashflows-report-section' hidden><div class='cashflows-section-heading'><h3>Review required</h3><span id='cashflowsReviewCount'></span></div><div class='cashflows-detail-search-toolbar'><input id='cashflowsReviewSearch' class='cashflows-detail-search-input' type='search' placeholder='Search any value in any column' aria-label='Search review-required items by any column' autocomplete='off'><button type='button' id='cashflowsReviewSearchClear' class='cashflows-secondary'>Clear</button></div><div class='cashflows-table-wrap'><table id='cashflowsReviewTable' class='cashflows-table'></table></div></section>
+            <section id='cashflowsTransactionsSection' class='cashflows-report-section cashflows-transactions-section' hidden>
+                <div class='cashflows-section-heading'>
+                    <div>
+                        <h3>Classified transactions</h3>
+                    </div>
+                    <span id='cashflowsTransactionsCount'></span>
+                </div>
+                <div class='cashflows-transactions-toolbar'>
+                    <input id='cashflowsTransactionsSearch' type='search' placeholder='Search any visible column' aria-label='Search classified transactions in any visible column'>
+                    <select id='cashflowsTransactionsType' aria-label='Filter classified transaction type'>
+                        <option value=''>All types</option>
+                        <option value='cash'>Cash</option>
+                        <option value='bank'>Bank</option>
+                        <option value='counter'>Counter-account</option>
+                        <option value='review'>Needs review</option>
+                    </select>
+                    <input id='cashflowsTransactionsAccount' type='search' placeholder='Account code' aria-label='Filter account code'>
+                    <input id='cashflowsTransactionsCategory' list='cashflowsTransactionsCategoryOptions' type='search' placeholder='Assigned category' aria-label='Filter assigned category' autocomplete='off'>
+                    <datalist id='cashflowsTransactionsCategoryOptions'></datalist>
+                    <button type='button' id='cashflowsTransactionsApply' class='cashflows-primary'>Apply</button>
+                    <button type='button' id='cashflowsTransactionsClear' class='cashflows-secondary'>Clear</button>
+                </div>
+                <div class='cashflows-table-wrap cashflows-transactions-table-wrap'>
+                    <table id='cashflowsTransactionsTable' class='cashflows-table'></table>
+                </div>
+                <div class='cashflows-transactions-pagination'>
+                    <button type='button' id='cashflowsTransactionsPrevious' class='cashflows-secondary' disabled>Previous</button>
+                    <span id='cashflowsTransactionsPageInfo'>Page 1 of 1</span>
+                    <button type='button' id='cashflowsTransactionsNext' class='cashflows-secondary' disabled>Next</button>
+                </div>
+            </section>
+            </div>
+        </section>
+        <section id='cashflowsLedgerDrilldownSection' class='cashflows-report-section' hidden aria-label='Cashflows ledger drill-down'>
+            <div class='cashflows-section-heading cashflows-drilldown-heading'>
+                <div>
+                    <h3>Cashflows ledger drill-down</h3>
+                    <div id='cashflowsDrilldownContext' class='cashflows-drilldown-context' aria-live='polite'></div>
+                    <div id='cashflowsDrilldownDatabaseTotals' class='cashflows-database-totals' aria-live='polite'
+                         title='Active Transaction Report source rows and distinct nonblank voucher IDs for this client and date range, including non-cash and zero-value rows. Search and pagination do not change these totals.'>
+                        <span class='cashflows-database-totals-label'>Database totals</span>
+                        <span>No. of rows <strong id='cashflowsDatabaseRowCount'>—</strong></span>
+                        <span>No. of vouchers <strong id='cashflowsDatabaseVoucherCount'>—</strong></span>
+                    </div>
+                </div>
+                <button type='button' id='cashflowsLedgerDrilldownBack' class='cashflows-secondary'>Back to summary</button>
+            </div>
+            <div class='cashflows-transactions-toolbar cashflows-drilldown-toolbar'>
+                <input id='cashflowsDrilldownSearch' type='search' placeholder='Search all ledger data' aria-label='Search ledger drill-down'>
+                <input id='cashflowsDrilldownCategory' list='cashflowsDrilldownCategoryOptions' type='search' placeholder='Category' aria-label='Filter ledger category' autocomplete='off'>
+                <datalist id='cashflowsDrilldownCategoryOptions'></datalist>
+                <select id='cashflowsDrilldownAccountHead' aria-label='Filter ledger account head'>
+                    <option value=''>All account heads</option>
+                </select>
+                <select id='cashflowsDrilldownTreasury' aria-label='Filter treasury type'>
+                    <option value=''>All cash and bank</option>
+                    <option value='Bank'>Bank</option>
+                    <option value='Cash'>Cash</option>
+                    <option value='Bank / Cash'>Mixed or unresolved</option>
+                </select>
+                <select id='cashflowsDrilldownPeriod' aria-label='Filter reporting period'><option value=''>All periods</option></select>
+                <button type='button' id='cashflowsDrilldownApply' class='cashflows-primary'>Apply</button>
+                <button type='button' id='cashflowsDrilldownClear' class='cashflows-secondary'>Clear</button>
+                <button type='button' id='cashflowsDrilldownExportButton' class='cashflows-secondary'>Export filtered XLSX</button>
+            </div>
+            <div class='cashflows-table-wrap cashflows-ledger-drilldown-table-wrap'>
+                <table id='cashflowsLedgerDrilldownTable' class='cashflows-table'></table>
+            </div>
+            <div class='cashflows-transactions-pagination'>
+                <button type='button' id='cashflowsDrilldownPrevious' class='cashflows-secondary' disabled>Previous</button>
+                <span id='cashflowsDrilldownPageInfo'>Page 1 of 1</span>
+                <button type='button' id='cashflowsDrilldownNext' class='cashflows-secondary' disabled>Next</button>
+            </div>
+            <div id='cashflowsDrilldownShortcuts' class='cashflows-drilldown-shortcuts' aria-label='Cashflows detail shortcuts'>
+                <button type='button' id='cashflowsDrilldownLoadTransfersButton' class='cashflows-secondary' data-cashflow-child-shortcut='transfers'>Load internal transfers</button>
+                <button type='button' id='cashflowsDrilldownLoadCustomerPaymentsButton' class='cashflows-secondary' data-cashflow-child-shortcut='customer_payments'>Load customer payments</button>
+                <button type='button' id='cashflowsDrilldownLoadDeductionsButton' class='cashflows-secondary' data-cashflow-child-shortcut='deductions'>Load customer deductions</button>
+                <button type='button' id='cashflowsDrilldownLoadReviewButton' class='cashflows-secondary' data-cashflow-child-shortcut='review'>Load review required</button>
+                <button type='button' id='cashflowsDrilldownViewTransactionsButton' class='cashflows-secondary' data-cashflow-transactions-shortcut>View classified transactions</button>
+            </div>
+            <div id='cashflowsDrilldownDetailHost' class='cashflows-drilldown-detail-host'></div>
+        </section>
+        <div id='cashflowsProcessing' class='cashflows-processing' role='dialog' aria-modal='true' aria-labelledby='cashflowsProcessingTitle' hidden>
+            <div class='cashflows-processing-panel'>
+                <div class='cashflows-processing-spinner' aria-hidden='true'></div>
+                <h2 id='cashflowsProcessingTitle'>Loading Cashflows summary</h2>
+                <p id='cashflowsProcessingMessage'>Preparing the selected period.</p>
+                <ol class='cashflows-processing-steps'>
+                    <li data-processing-step='prepare'>Prepare selected period</li>
+                    <li data-processing-step='load'>Load Cashflows data</li>
+                    <li data-processing-step='render'>Render report summary</li>
+                </ol>
+            </div>
+        </div>
+        <footer class='reconciliation-footer'>
+            <span>Reports are kept separate from Audit Verification setup.</span>
+            <span>Reports centre - Phase 1</span>
+        </footer>
+    </main>
+    <section id='cashflowReconciliation' role='main' aria-labelledby='cashflowReconciliationTitle' hidden>
+        <div class='recon-accessible-context'>
+            <div><h2 id='cashflowReconciliationTitle'>Ledger / Cashflow reconciliation</h2><p id='reconContext' class='recon-muted'></p></div>
+        </div>
+        <div class='recon-toolbar'>
+            <div class='recon-report-period'>
+                <span class='recon-muted'>Report period</span>
+                <strong id='reconReportPeriod' aria-describedby='reconPeriodNote'></strong>
+                <span id='reconPeriodNote' class='recon-period-note'>Linked to the loaded Cashflows Report</span>
+            </div>
+            <label id='reconViewLabel' hidden>Proof <select id='reconView' aria-label='Reconciliation Treasury proof'></select></label>
+            <div class='recon-tabs' role='tablist' aria-label='Reconciliation schedules'>
+                <button type='button' id='reconWorkingTab' class='cashflows-secondary' role='tab' aria-controls='reconWorking' aria-selected='true' data-recon-tab='working'>Working paper</button>
+                <button type='button' id='reconDifferencesTab' class='cashflows-secondary' role='tab' aria-controls='reconDifferences' aria-selected='false' tabindex='-1' data-recon-tab='differences'>Voucher differences</button>
+            </div>
+            <button type='button' id='reconCompletenessOpen' class='cashflows-secondary' disabled>Voucher completeness</button>
+            <button type='button' id='reconReload' class='cashflows-secondary'>Reload working paper</button>
+            <button type='button' id='reconExport' class='cashflows-secondary' disabled>Export reconciliation</button>
+            <button type='button' id='reconClose' class='cashflows-secondary recon-return'>Cashflows Report</button>
+        </div>
+        <div id='cashflowReconciliationCoverageAlert' class='cashflow-coverage-alert' role='status' aria-live='polite' hidden></div>
+        <div class='recon-body'>
+            <div id='reconProcessing' hidden></div>
+            <div id='reconExportProcessing' aria-label='Reconciliation Excel preparation' hidden></div>
+            <div id='reconStatus' class='recon-status' role='status' aria-live='polite' hidden></div>
+            <section id='reconWorking' role='tabpanel' aria-labelledby='reconWorkingTab'></section>
+            <section id='reconDifferences' role='tabpanel' aria-labelledby='reconDifferencesTab' hidden>
+                <div class='recon-evidence-head'><label><input type='checkbox' id='reconIncludeMatched'> Include matched postings</label><span class='recon-muted'>Whole selected range; complete account/voucher groups.</span></div>
+                <div id='reconDifferenceRows'></div>
+            </section>
+            <dialog id='reconAdjustmentDialog' aria-labelledby='reconAdjustmentTitle' hidden>
+                <header class='recon-popup-header'>
+                    <div><h3 id='reconAdjustmentTitle'>Adjustment transactions</h3><div id='reconAdjustmentContext' class='recon-popup-context'></div>
+                        <p id='reconAdjustmentFreshness' class='recon-muted' role='status' aria-live='polite' hidden></p>
+                        <button type='button' id='reconAdjustmentRetryCheck' class='cashflows-secondary' hidden>Retry source check</button>
+                    </div>
+                    <button type='button' id='reconAdjustmentClose' class='cashflows-secondary' aria-label='Close adjustment transactions'>Close</button>
+                </header>
+                <form id='reconAdjustmentFilters' class='recon-popup-controls'>
+                    <label>Search <input type='search' id='reconAdjustmentSearch' maxlength='200' placeholder='Search this adjustment'></label>
+                    <label>Source <select id='reconAdjustmentBook'><option value='ledger'>Cash/Bank ledger rows</option><option value='voucher'>Complete voucher rows</option></select></label>
+                    <button type='submit' class='cashflows-secondary'>Apply</button>
+                    <button type='button' id='reconAdjustmentClear' class='cashflows-secondary'>Clear search</button>
+                    <nav class='recon-popup-paging' aria-label='Adjustment transaction pages'>
+                        <button type='button' id='reconAdjustmentPrevious' class='cashflows-secondary' disabled>Previous</button>
+                        <span id='reconAdjustmentPage' role='status' aria-live='polite'></span>
+                        <button type='button' id='reconAdjustmentNext' class='cashflows-secondary' disabled>Next</button>
+                    </nav>
+                </form>
+                <section id='reconSupport' class='recon-evidence' aria-label='Adjustment transactions' hidden></section>
+            </dialog>
+            <dialog id='reconCompletenessDialog' aria-labelledby='reconCompletenessTitle' hidden>
+                <header class='recon-completeness-header'><div><h3 id='reconCompletenessTitle'>Voucher completeness</h3><p id='reconCompletenessContext' class='recon-muted'></p></div><button type='button' id='reconCompletenessClose' class='cashflows-secondary'>Close</button></header>
+                <div id='reconCompletenessContent' class='recon-completeness-content'></div>
+            </dialog>
+        </div>
+    </section>
+    <script src='/static/client_context.js?v=30'></script>
+    <script src='/static/loading_ui.js?v=ce6d21ca20c8'></script>
+    <script src='/static/reconciliation.js?v=76'></script>
+</body>
+</html>

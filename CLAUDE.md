@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Gated C# APIs/jobs, owned shell/dashboard, acceptance tests and restricted Supabase access; remaining pages use packaged root static fallback. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Gated C# APIs/jobs, independently packaged frontend under frontend/, acceptance tests and restricted Supabase access. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-23: C# frontend/package isolation verified; Python remains through clean-copy and speed checks before removal. See revised phase order in CHANGELOG_ARCHIVE.md.
 - 2026-11-22: P62 local readiness, Supabase isolation and Aadil's feature acceptance passed; Render is postponed. See C# local report and Verification acceptance.
 - 2026-11-22: Added the C#-owned dashboard and shared assets; other module pages still use the packaged static fallback. See C# frontend ownership — dashboard.
 - 2026-11-22: Removed C# Python forwarding and bridge ownership switches; Python remains a separate rollback app. See C# bridge retirement.

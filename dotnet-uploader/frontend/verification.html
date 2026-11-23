@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verification Module</title>
+    <link rel="stylesheet" href="/static/style.css?v=76">
+    <style>
+        /* Popup overlay (reused from Phase 5) */
+        #sessionPopupOverlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #sessionPopup {
+            background: white;
+            padding: 30px;
+            border-radius: 16px;
+            max-width: 480px;
+            width: 90%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        #sessionPopup h2 {
+            margin-top: 0;
+            font-size: 22px;
+            color: #1a1a2e;
+        }
+
+        #sessionPopup .field {
+            margin-bottom: 16px;
+        }
+
+        #sessionPopup label {
+            display: block;
+            font-weight: 600;
+            font-size: 14px;
+            color: #1e293b;
+            margin-bottom: 4px;
+        }
+
+        #sessionPopup select,
+        #sessionPopup input[type="date"] {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        #sessionPopup .btn-row {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+
+        #sessionPopup .btn-primary {
+            padding: 8px 24px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #sessionPopup .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Direct shortcut into Verification, kept scoped to this popup so the existing
+           global primary-button language remains unchanged elsewhere. */
+        #sessionPopup .btn-start-verification {
+            background: #16a34a;
+        }
+
+        #sessionPopup .btn-start-verification:hover:not(:disabled) {
+            background: #15803d;
+        }
+
+        #sessionPopup .btn-secondary {
+            padding: 8px 24px;
+            background: #e2e8f0;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #sessionPopup .error-msg {
+            color: #dc2626;
+            font-size: 14px;
+            margin-top: 8px;
+        }
+
+        /* Data links section */
+        .data-links {
+            margin-top: 30px;
+            background: white;
+            border-radius: 16px;
+            padding: 20px 25px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .data-links h2 {
+            font-size: 18px;
+            color: #1a1a2e;
+            margin-bottom: 12px;
+        }
+
+        /* Phase 1 of 5 (card strip redesign): horizontally scrolling mini-card strip. Native
+           browser scroll only, no arrow controls — flex row with no wrap + overflow-x auto.
+           Replaces the old .link-grid/.link-item flat-row layout. */
+        .data-links .link-card-strip {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 14px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+        }
+
+        /* Vertical mini-card, styled to read as a "read-only shortcut" consistent with the
+           app's existing card language (.module-card/.stat-card in style.css): white
+           background, rounded corners, soft shadow, subtle hover lift. Fixed width so cards
+           don't stretch/shrink and keep a uniform size across the strip. */
+        .data-links .link-card {
+            flex: 0 0 150px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 6px;
+            padding: 16px 12px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+            text-decoration: none;
+            color: #1a1a2e;
+            font-weight: 500;
+        }
+
+        .data-links .link-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+            border-color: #4fc3f7;
+        }
+
+        .data-links .link-card .icon {
+            font-size: 28px;
+        }
+
+        .data-links .link-card .label {
+            font-size: 13px;
+        }
+
+        .data-links .link-card .badge {
+            font-size: 11px;
+            background: #e2e8f0;
+            padding: 2px 10px;
+            border-radius: 10px;
+            color: #475569;
+        }
+
+        /* Verification session content (hidden initially) */
+        #verificationSessionContent {
+            display: none;
+        }
+
+        .line-items-grid {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .line-items-grid th {
+            background: #f8fafc;
+            padding: 6px 8px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .line-items-grid td {
+            padding: 4px 8px;
+            border-bottom: 1px solid #f0f2f5;
+        }
+
+        .line-items-grid input {
+            width: 100%;
+            padding: 4px 6px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+
+        .line-items-grid .remove-btn {
+            background: none;
+            border: none;
+            color: #dc2626;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        .procedure-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 8px 16px;
+        }
+
+        .procedure-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .procedure-item input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+        }
+
+        .procedure-item input[type="text"] {
+            flex: 1;
+            padding: 2px 6px;
+            border: 1px solid #d0d5dd;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .library-panel {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin: 12px 0;
+        }
+
+        .nav-buttons {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            margin-top: 16px;
+        }
+
+        .btn-verify {
+            padding: 8px 20px;
+            background: #22c55e;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-verify:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-outline {
+            padding: 8px 20px;
+            background: white;
+            color: #1a1a2e;
+            border: 1px solid #d0d5dd;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-outline:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-danger {
+            padding: 8px 20px;
+            background: #dc2626;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.pending {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-badge.passed {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-badge.failed {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status-badge.verified {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #e2e8f0;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .error-msg {
+            color: #dc2626;
+            font-size: 14px;
+            margin-top: 6px;
+        }
+
+        .success-msg {
+            color: #16a34a;
+            font-size: 14px;
+            margin-top: 6px;
+        }
+
+        /* Supporting modal (reused) */
+        #supportingModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #supportingModal .modal-content {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 700px;
+            width: 90%;
+            max-height: 80vh;
+            overflow: auto;
+        }
+
+        #supportingModal .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        #supportingModal .search-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        #supportingModal .search-row input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+        }
+
+        #supportingModal .search-row button {
+            padding: 8px 16px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        #supportingModal .result-item {
+            padding: 8px;
+            border-bottom: 1px solid #f0f2f5;
+            font-size: 13px;
+            cursor: pointer;
+        }
+
+        #supportingModal .result-item:hover {
+            background: #f8fafc;
+        }
+
+        /* Print styles */
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+
+            .nav-buttons {
+                display: none !important;
+            }
+
+            body {
+                background: white;
+            }
+
+            .navbar {
+                display: none !important;
+            }
+
+            .main-container {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body data-nav-module="Verification" data-nav-parent="index.html">
+    <!-- Top Navigation Bar -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div id="navLeft"></div>
+            <div class="nav-client" id="clientControl">
+                <!-- Will be rendered by client_context.js -->
+            </div>
+            <div class="nav-user"></div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="main-container" id="verificationContainer">
+
+        <!-- ============================================= -->
+        <!-- DASHBOARD CONTENT (visible by default)        -->
+        <!-- ============================================= -->
+        <div id="dashboardContent">
+            <!-- Hard-refresh view-persistence fallback: shown by showDashboardWithMessage() in
+                 verification.js when a URL-restored cashbook/session view can't actually be
+                 resumed (e.g. the session was completed/deleted elsewhere) - reuses the same
+                 .upload-status/.error styling as #verificationStatus below, no new CSS. -->
+            <div id="dashboardFallbackMessage" class="upload-status error" style="display:none; margin-bottom:16px;">
+            </div>
+
+            <!-- Verification Hub: two labelled groups replacing the old 4-card Module Grid.
+                 Cash/Bank/Local Vendor/Import Vendor voucher tiles are live (they navigate with ?type=, re-entering
+                 through the existing window.onload auto-open path in verification.js); every
+                 other tile is a display-only "Coming soon" placeholder — no id, no handler.
+                 Transaction Report moved down into the Client Data Links section (it's a data
+                 shortcut, not a verification type).
+
+                 data-verification-type is the contract for a LIVE tile: it marks the tile as
+                 clickable and names the ?type= it navigates to. One delegated listener in
+                 verification.js picks up every tile carrying it, so a future tile becomes live —
+                 with the same spinner + double-click lock as Cash/Bank — purely by adding this
+                 attribute, no JS change needed. A "Coming soon" tile omits it and stays inert. -->
+            <section class="hub-group">
+                <h2 class="hub-group-title">Voucher verification</h2>
+                <div class="module-grid">
+                    <!-- Cash vouchers (live) — wired in verification.js to ?type=cash -->
+                    <div class="module-card" id="cashVoucherTile" data-verification-type="cash">
+                        <div class="module-icon">💰</div>
+                        <h3>Cash vouchers</h3>
+                        <p>Verify cash payment and receipt vouchers</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <!-- Bank vouchers (live) — wired in verification.js to ?type=bank -->
+                    <div class="module-card" id="bankVoucherTile" data-verification-type="bank">
+                        <div class="module-icon">🏦</div>
+                        <h3>Bank vouchers</h3>
+                        <p>Verify bank payment and receipt vouchers</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <!-- Local Vendor is live once its Account Set has been published. -->
+                    <div class="module-card" id="localVendorTile" data-verification-type="local_vendor">
+                        <div class="module-icon">🏪</div>
+                        <h3>Local vendor</h3>
+                        <p>Verify Local Vendor JVs; Cash/Bank payments remain in Treasury verification.</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <!-- Import Vendor is live once its Account Set has been published. -->
+                    <div class="module-card" id="importVendorTile" data-verification-type="import_vendor">
+                        <div class="module-icon">🚢</div>
+                        <h3>Import vendor</h3>
+                        <p>Verify Import Vendor JVs; Cash/Bank payments remain in Treasury verification.</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <div class="module-card" id="exportCustomerTile" data-verification-type="export_customer">
+                        <div class="module-icon">🌍</div>
+                        <h3>Export customer</h3>
+                        <p>Verify Export Customer JVs; Cash/Bank payments remain in Treasury verification.</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <div class="module-card" id="payrollTile" data-verification-type="payroll">
+                        <div class="module-icon">👥</div>
+                        <h3>Payroll</h3>
+                        <p>Verify Payroll JVs; Cash/Bank payments remain in Treasury verification.</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                    <div class="module-card" id="contractorTile" data-verification-type="contractor">
+                        <div class="module-icon">🔧</div>
+                        <h3>Contractor</h3>
+                        <p>Verify Contractor JVs; Cash/Bank payments remain in Treasury verification.</p>
+                        <span class="module-status">Ready</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="hub-group">
+                <h2 class="hub-group-title">Process verification</h2>
+                <div class="module-grid">
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">📥</div>
+                        <h3>Store receiving vs vendor JV</h3>
+                        <p>Match store receiving against vendor JVs</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🔁</div>
+                        <h3>PO vs gate receiving vs store receiving</h3>
+                        <p>Three-way match across the receiving cycle</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                    <div class="module-card coming-soon">
+                        <div class="module-icon">🏭</div>
+                        <h3>Store issuance vs article manufactured</h3>
+                        <p>Match store issuance against production output</p>
+                        <span class="module-status coming">Coming soon</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Quick Stats -->
+            <section class="quick-stats">
+                <h2>📈 Verification Overview</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-label">Pending Verifications</span>
+                        <span class="stat-value" id="pendingCount">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Verified Today</span>
+                        <span class="stat-value" id="verifiedToday">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Total Verified</span>
+                        <span class="stat-value" id="totalVerified">0</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Data Links -->
+            <div class="data-links">
+                <h2>📂 Client Data Links</h2>
+                <!-- Cards are generated dynamically from GET /api/templates by loadDataLinksCards()
+                     in verification.js, so any current or future active template automatically gets
+                     a shortcut card here with no HTML changes needed - see that function for the
+                     icon lookup/fallback and card markup. -->
+                <div class="link-card-strip" id="dataLinksCardStrip"></div>
+                <p style="font-size:12px; color:#94a3b8; margin-top:10px;">💡 Click a card to open the template viewer
+                    filtered to that data type, with its own date range and search.</p>
+            </div>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- VERIFICATION SESSION CONTENT (hidden initially) -->
+        <!-- ============================================= -->
+        <div id="verificationSessionContent">
+            <!-- Transaction List Popover (hidden) -->
+            <div id="transactionListPopover" class="transaction-list-popover" style="display:none;">
+                <div class="popover-header" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span>Voucher list <span id="popoverTotal"
+                            style="font-weight:400; font-size:14px; color:#64748b; margin-left:12px;"></span></span>
+                    <button class="close-btn" id="popoverCloseBtn"
+                        style="background:none; border:none; font-size:22px; cursor:pointer; color:#94a3b8; padding:0 4px;"
+                        title="Close popover">×</button>
+                </div>
+                <!-- Client-side filter over the already-loaded sessionTransactions data (no new
+                     backend call) - see filterTransactionsForPopover()/renderTransactionPopover()
+                     in verification.js. Cleared automatically when the popover closes. -->
+                <div class="popover-search-row">
+                    <input type="text" id="transactionListSearchInput"
+                        placeholder="Search voucher ID, date, account, amount, status...">
+                </div>
+                <div class="popover-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Voucher ID</th>
+                                <th>Date</th>
+                                <th>Account Name</th>
+                                <th style="text-align:right;">Amount</th>
+                                <th style="text-align:center;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactionListBody">
+                            <tr>
+                                <td colspan="5" style="text-align:center; color:#94a3b8;">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Status bar -->
+            <div id="verificationStatus" class="upload-status" style="display:none; margin-bottom:12px;"></div>
+
+            <!-- Cashbook return — a page-level action, free of the 60%-wide voucher table, pinned
+                 to the extreme right of the full page. Populated once per session by
+                 renderVoucherHeader() in verification.js (same click handler as before). -->
+            <div id="cashbookBar" class="cashbook-bar"></div>
+
+            <!-- Voucher Panel: constrained to 60% of screen width, on the left, leaving the
+                 remainder clear for future development (per user request). -->
+            <div class="voucher-panel">
+                <!-- Voucher Header: Prev voucher, the voucher title (with the 🔍 view-all icon
+                     inline next to the voucher number) + subtitle, Next voucher. Kept inside
+                     .voucher-panel so it aligns with the table's width. Populated by
+                     renderVoucherHeader() in verification.js, re-rendered on every voucher
+                     navigation. -->
+                <div id="voucherHeaderBar" class="voucher-header-bar"></div>
+
+                <!-- Voucher Lines (Phase 3): collapsed/expand summary rows, one per line. Each row
+                     expands to reveal its own action bar (Audit Guidance / Supporting / Type),
+                     independently of the other lines. -->
+                <div id="voucherLinesContainer" class="voucher-lines-container"></div>
+            </div>
+
+            <!-- Hidden inputs -->
+            <input type="hidden" id="currentSessionId" value="">
+            <input type="hidden" id="currentDetailId" value="">
+            <input type="hidden" id="currentClientDataId" value="">
+            <input type="hidden" id="currentVoucherId" value="">
+        </div>
+
+        <!-- ============================================= -->
+        <!-- SESSION POPUP (hidden by default)             -->
+        <!-- ============================================= -->
+        <div id="sessionPopupOverlay">
+            <div id="sessionPopup">
+                <!-- Text content set/overwritten by openSessionPopup() in verification.js based on
+                     currentType ('cash' or 'bank') - these ids exist only so JS can target them;
+                     the markup below is just the Cash-mode default shown before JS runs. -->
+                <h2 id="sessionPopupTitle">📋 Start Cash Verification</h2>
+                <p id="sessionPopupSubtitle" style="color:#64748b; margin-bottom:16px;">Select a cashbook to begin
+                    verification.</p>
+                <div class="field">
+                    <label id="popupCashbookLabel">📒 Cashbook</label>
+                    <select id="popupCashbookSelect" disabled>
+                        <option value="">-- Loading cashbooks... --</option>
+                    </select>
+                </div>
+                <!-- Editable search range (confirmed fix): defaults to the most recent month that
+                     actually has cashbook data for this client (see loadCashbooks() in
+                     verification.js), but can be overridden here - restores the flexibility that
+                     existed before commit ad5475b replaced these inputs with a hardcoded
+                     "current calendar month" range. -->
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;">
+                        <label for="popupPeriodStart">Start Date</label>
+                        <input type="date" id="popupPeriodStart">
+                    </div>
+                    <div style="flex:1;">
+                        <label for="popupPeriodEnd">End Date</label>
+                        <input type="date" id="popupPeriodEnd">
+                    </div>
+                </div>
+                <div id="popupError" class="error-msg" style="display:none;"></div>
+                <div class="btn-row">
+                    <button class="btn-secondary" id="popupCancelBtn">Cancel</button>
+                    <button class="btn-primary" id="popupStartBtn" disabled>🚀 Open Cashbook</button>
+                    <button class="btn-primary btn-start-verification" id="popupStartVerificationBtn" disabled>✅ Start Verification</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- CASHBOOK PAGE                                -->
+        <!-- ============================================= -->
+        <div id="cashbookContent" style="display:none;">
+            <div class="cashbook-header"
+                style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px;">
+                <div>
+                    <!-- Prefix text overwritten by openSessionPopup()/openCashbook() flow in
+                         verification.js based on currentType - see the note on #sessionPopupTitle. -->
+                    <h1 style="font-size:24px; margin:0; color:#1a1a2e;"><span id="cashbookHeaderLabel">📒
+                            Cashbook:</span> <span id="cashbookNameDisplay"></span>
+                    </h1>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span id="cashbookProgress" style="font-size:13px; color:#64748b;"></span>
+                    <button id="startVerificationBtn"
+                        style="padding:6px 16px; background:#22c55e; color:white; border:none; border-radius:6px; font-weight:600; cursor:pointer;">✅
+                        Verification</button>
+                    <!-- Same peer-button pattern as #cashbookBar's own "Audit Workbook" button
+                         (session header, renderVoucherHeader() in verification.js) - reuses
+                         navigateToAuditWorkbook() verbatim. Disabled here (with a tooltip) when no
+                         verification session is active, since this screen can be reached before one
+                         is started - see activateCashbookView() for the enable/disable logic. -->
+                    <button id="cashbookAuditWorkbookBtn" class="btn-cashbook"
+                        title="Open the Audit Workbook for the active session">
+                        <span class="btn-icon">📗</span> Audit Workbook</button>
+                </div>
+            </div>
+            <!-- Date Range Selector -->
+            <div
+                style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-end; background:white; padding:12px 16px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.04); margin-bottom:16px;">
+                <!-- Cashbook/Bankbook selector (Phase 1 of 3): label + list populated by
+                     openCashbook() in verification.js based on currentType, reusing the same
+                     account list already fetched for the Start-Verification popup. UI + population
+                     only this phase - selecting a different account here does not yet reload the
+                     preview (Phase 2). -->
+                <div>
+                    <label id="cashbookSelectorLabel"
+                        style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">📒 Cashbook</label>
+                    <select id="cashbookSelector"
+                        style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                    </select>
+                </div>
+                <div>
+                    <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">Start Date</label>
+                    <input type="date" id="cashbookStartDate"
+                        style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                </div>
+                <div>
+                    <label style="font-weight:600; font-size:12px; display:block; margin-bottom:2px;">End Date</label>
+                    <input type="date" id="cashbookEndDate"
+                        style="padding:4px 8px; border:2px solid #e2e8f0; border-radius:6px; font-size:13px;">
+                </div>
+                <button id="cashbookFetchBtn"
+                    style="padding:4px 16px; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:500;">📊
+                    Apply</button>
+                <span id="cashbookStatus" style="font-size:12px; color:#64748b;"></span>
+            </div>
+            <!-- Table Container -->
+            <div id="cashbookTableContainer"
+                style="background:white; border-radius:12px; overflow:auto; box-shadow:0 2px 8px rgba(0,0,0,0.06); padding:12px;">
+                <div id="cashbookTableWrapper" style="overflow-x:auto;">
+                    <!-- Table will be rendered here -->
+                </div>
+                <!-- Pagination Controls -->
+                <div id="cashbookPagination"
+                    style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px; padding-top:12px; border-top:1px solid #e2e8f0;">
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <label style="font-size:12px; font-weight:500;">Rows per page:</label>
+                        <select id="cashbookPageSize"
+                            style="padding:2px 6px; border:1px solid #d0d5dd; border-radius:4px; font-size:12px;">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button id="cashbookPrevPage"
+                            style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                            disabled>Previous</button>
+                        <span id="cashbookPageInfo" style="font-size:12px;">Page 1 of 1</span>
+                        <button id="cashbookNextPage"
+                            style="padding:2px 10px; border:1px solid #d0d5dd; border-radius:4px; background:white; cursor:pointer;"
+                            disabled>Next</button>
+                    </div>
+                    <span id="cashbookRowCount" style="font-size:12px; color:#64748b;">0 rows</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- SUPPORTING DOCUMENTS MODAL                    -->
+        <!-- ============================================= -->
+        <div id="supportingModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>📎 Supporting Documents</h3>
+                    <button class="close-btn" id="supportingModalClose"
+                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                </div>
+                <div class="search-row">
+                    <input type="text" id="supportingSearchInput" placeholder="Search by reference...">
+                    <button id="supportingSearchBtn">Search</button>
+                </div>
+                <div id="supportingResults">
+                    <div style="color:#94a3b8; text-align:center; padding:20px;">Enter a reference number and click
+                        Search.
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- ============================================= -->
+        <!-- DFD (DATA FLOW DIAGRAM) PLACEHOLDER MODAL     -->
+        <!-- Phase 5: full-page shell only, no diagram content yet -->
+        <!-- ============================================= -->
+        <div id="dfdModal">
+            <div class="modal-content dfd-modal-content">
+                <div class="modal-header">
+                    <h3>🗺️ Data Flow Diagram</h3>
+                    <button class="close-btn" id="dfdModalClose"
+                        style="background:none; border:none; font-size:28px; cursor:pointer; color:#94a3b8;">&times;</button>
+                </div>
+                <div class="dfd-modal-placeholder">
+                    <div class="dfd-placeholder-icon">🧭</div>
+                    <h4>Coming Soon</h4>
+                    <p>Data Flow Diagram — coming soon as part of the Audit Knowledge module.</p>
+                </div>
+            </div>
+        </div>
+        <!-- ============================================= -->
+        <!-- VOUCHER CHANGE-ALERT POPOVER (Phase 8)        -->
+        <!-- Static container, positioned/populated by JS on icon click, -->
+        <!-- mirroring the Data Bank row-history popover pattern.        -->
+        <!-- ============================================= -->
+        <div id="voucherChangePopover" class="voucher-change-popover" style="display:none;"></div>
+        <!-- ============================================= -->
+        <!-- AUDIT GUIDANCE ICON POPOVER                   -->
+        <!-- Static container, positioned/populated by JS on icon click, same pattern as -->
+        <!-- #voucherChangePopover above (lighter than the full-page #procedureModal so   -->
+        <!-- the triggering icon stays clickable to close it).                            -->
+        <!-- ============================================= -->
+        <div id="auditGuidancePopover" class="audit-guidance-popover" style="display:none;"></div>
+        <!-- ============================================= -->
+        <!-- SUPPORTING DOCUMENTS PROCEDURE MODAL + BROWSE MODAL -->
+        <!-- Extracted into static/procedure_modal.js (relocation only) so it can be reused by other -->
+        <!-- pages without duplicating this markup — that file injects its own #procedureModal/       -->
+        <!-- #procedureBrowseModal markup into <body> at load time. See its own header comment.        -->
+        <!-- ============================================= -->
+
+        <!-- ============================================= -->
+        <!-- NAVIGATION CONFIRM MODAL (moved outside procedureModal) -->
+        <!-- ============================================= -->
+        <div id="navConfirmModal"
+            style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:4000; justify-content:center; align-items:center;">
+            <div class="modal-content"
+                style="background:white; border-radius:16px; padding:30px; max-width:480px; width:90%; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+                <h3 style="margin:0 0 8px 0; color:#1a1a2e;">⚠️ Transaction Not Validated</h3>
+                <p style="color:#64748b; font-size:15px; margin-bottom:20px;" id="navConfirmMessage">This transaction
+                    has not been validated. Do you want to proceed anyway?</p>
+                <div style="display:flex; gap:12px; justify-content:flex-end;">
+                    <button id="navConfirmCancel"
+                        style="padding:8px 24px; background:#e2e8f0; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px;">Cancel</button>
+                    <button id="navConfirmOk"
+                        style="padding:8px 24px; background:#f59e0b; border:none; border-radius:6px; font-weight:600; cursor:pointer; font-size:14px; color:white;">Confirm</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- #voucherVerifyToast (Momentary success toast, bottom-right, auto-dismisses) is now also
+             injected by static/procedure_modal.js — see that file's showVerifyToast(). -->
+
+        <script src="/static/client_context.js?v=30"></script>
+        <script src="/static/procedure_modal.js?v=38"></script>
+        <script src="/static/loading_ui.js?v=2"></script>
+        <script src="/static/api_utils.js?v=1"></script>
+        <script src="/static/verification.js?v=31"></script>
+    </div>
+</body>
+
+</html>
