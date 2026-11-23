@@ -127,9 +127,9 @@ For runtime role creation, password setup, grants, and secret storage, follow th
 |---|---|
 | C# Setup full-database backup and isolated restore | P59 native replacement; local acceptance and separate-device recovery copy remain pending. |
 | C# Data Bank current/history workbook before selected-template purge | Existing P33 behavior; required proof gate stays in front of purge. |
-| `storage_cleanup.py`, `audit_postgres_indexes.py` | Python global maintenance remains available for the rollback app; no C# global maintenance or index-removal command is exposed. |
-| `backfill_rate.py`, `backfill_extract_amount.py`, and `scripts/backfill_*.py` | Historical/repair scripts, not C# startup tasks. Keep offline and review each against current schema/data before any rerun. |
+| `storage_cleanup.py`, `audit_postgres_indexes.py` | Optional Python global maintenance for the rollback app; not a C# runtime dependency. No global index-removal command is exposed in C#. Use approved PostgreSQL administrator/provider tooling if such maintenance is needed after Python retirement. |
+| `backfill_rate.py`, `backfill_extract_amount.py`, and `scripts/backfill_*.py` | Historical/repair scripts, not C# startup tasks. Keep offline and review each against current schema/data before any rerun. The Cash/Bank classification script writes unless `--dry-run` is supplied. |
 | `scripts/rehearse_database_backup.py` | Legacy Python recovery rehearsal; retain as rollback evidence. C# isolated restore has its own fixture test. |
-| Python test and experiment files | Retain as historical evidence; not production launch or maintenance dependencies. |
+| Python test and experiment files | Not C# runtime dependencies, but 25 C# test files currently call 31 Python oracle/browser scripts. Keep through the 7B comparison, then remove or replace these calls in Phase 6B before the final Python-free source audit. |
 
 No Python operational file is invoked by the C# tray. Retain Python launchers through the final speed comparison; any later retirement needs a separate inventory-backed approval.

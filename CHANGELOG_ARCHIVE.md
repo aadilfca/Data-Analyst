@@ -10512,3 +10512,19 @@ Phase 4 must document non-Python runtime requirements, including PostgreSQL and 
 ## C# Phase 4 Docker-context and operations update — 2026-11-23
 
 Removed root `static/` allowlist entries from `Dockerfile.dockerignore`. The Dockerfile copies only `dotnet-uploader/global.json`, the C# API project and `dotnet-uploader/frontend`, so the build context no longer includes the Python frontend. Updated `OPERATIONS.md` to mark Phase 3 frontend ownership complete and keep Render postponed. The Phase 4 Docker image built successfully; inspection confirmed C# frontend files are present and root Python `static/` files are absent. `git diff --check` passed. No Python source, runtime code, database or deployment state changed in this phase.
+
+## C# Phase 5 operational-tool independence audit — 2026-11-23
+
+Static review found no Python launch or Python runtime calls in the C# API, tray or C# launch command. C# setup, definition transfer, tray, local database backup/restore and scoped cleanup have native .NET paths. Historical SQLite-to-Supabase migration/backfills are not app startup dependencies; optional global cleanup/index review is DBA maintenance. No utility was run, no test was run, and no Python, database or configuration file changed. The Cash/Bank classification backfill writes by default unless `--dry-run` is supplied, so it must remain offline unless reviewed and deliberately applied.
+
+Found a development-only dependency not covered by the runtime scan: 25 C# test files invoke 31 Python oracle/browser scripts. They remain available through the Python/C# speed comparison. Added Phase 6B to remove or replace those calls after 7B, then run the final independence scan/build in 7C. Phase 3B/3C was committed as `6aedf97a`; Phase 4 Docker-context work is committed as `9e4a2fc4`.
+
+## C# Phase 7A clean-copy proof and Phase 7B comparison harness — 2026-11-23
+
+The clean `dotnet-uploader` copy built in Release with Python unavailable on `PATH`; the API returned 200 for liveness, database readiness and application readiness using the repository-local .NET runtime. The check used the existing protected development configuration and disabled background workers. This confirms Python independence, while PostgreSQL/Supabase and protected configuration remain external requirements. Docker was available after Aadil started it.
+
+Added a standalone Npgsql probe and Python runner for Phase 7B. Both fetch the same selected active Client Data rows with the same bounded query inside read-only repeatable snapshots; alternating rounds compare counts, bytes and hashes before any timing evidence is saved. The evidence file is restricted to aggregate metadata and timing/hash values outside the repository. The C# probe builds with 0 warnings/errors; five offline runner safety checks pass.
+
+The first live attempt found that Python's ignored `.env` password was rejected and that the prior scope (client 5/template 1, Jan–Jun 2026) has no active uploads. With Aadil's approval, an aggregate-only scan found just two active rows for client 1/template 1 in November 2026. Three alternating rounds returned matching row counts, byte counts and hashes. Median fetch time was 0.078 seconds for Python and 0.170 seconds for C#; this two-row timing is a harness smoke check, not a speed conclusion. The 2,487-byte timing/hash evidence is in a temporary file outside the repository. Rows were held in memory only; no `.env`, protected secret or database content was changed.
+
+On 2026-11-23, Aadil deferred the representative speed comparison until C# app work is complete. Revised order: 6B test-harness independence → 7C C# independence audit → 8 section review → 7B Aadil's speed comparison → 6A Python retirement after acceptance. Keep Python intact until he accepts the final comparison.

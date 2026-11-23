@@ -7,7 +7,7 @@ Version 3: P07A–P07C precede P08 to address tenant and audit-firm collaboratio
 - **Existing:** behavior observed in source or required by the project guide; verify it with isolated fixtures before replacing an endpoint.
 - **Target:** proposed implementation contract for review; implementation still follows each phase's file/approach gates.
 - **Decided:** Aadil selected a 500 MB Free-plan database ceiling on 2026-11-10. This supersedes the earlier 400 MB ceiling for migration planning; see section 4.
-- Move all backend behavior, active frontend pages/assets, calculations, reports, workbooks and jobs to .NET. Maintain C# frontend copies in `dotnet-uploader/frontend`; the C# host/package never uses root `static/` or Python. Google Drive is excluded. Keep Python unchanged through pre-removal Phase 7A/7B; remove it only after Aadil accepts both checks, then complete Phase 7C.
+- Move all backend behavior, active frontend pages/assets, calculations, reports, workbooks and jobs to .NET. Maintain C# frontend copies in `dotnet-uploader/frontend`; the C# host/package never uses root `static/` or Python. Google Drive is excluded. Keep Python unchanged through C# completion and Aadil's post-completion speed comparison; remove it only after he accepts that comparison.
 - Preserve P01 as a historical snapshot. This contract supersedes its ownership proposals and pending-policy notes without rewriting captured source or changing the existing Python patch. P01–P05C implementation remains reusable.
 
 ## 2. Public API and access
@@ -458,7 +458,7 @@ Proposed job states are queued, preparing_inputs, running, succeeded, failed, ca
 | P46–P52 | Development ports session lifecycle, lookup/check routes, atomic review/status, tenant-native evidence, Forms/Physical Bills, Cross-checks, Audit Workbook, print and both exports. Candidate migration `0022` remains unapplied; routes stay disabled pending P57–P63 database acceptance and deployment. |
 | P57, P59–P63 | P57 backend accepted; Drive removed. P59/P60 stay default-off; local backup/tray system checks remain. P61 is limited to database/configuration, reviewed schema state, startup/tray, recovery and rollback. Defer Verification and upload/preview feature acceptance to Aadil's manual P62 staging review; keep unaccepted modules off. P62 rehearsal and P63 production cutover remain separate. P63 also requires cross-device recovery and provider baseline. See AGENTS.md and POSTGRES_SCHEMA_OWNERSHIP.md. |
 
-IDs remain stable; execution is P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 → P41–P52 → P57 → P59–P63. The C# host never forwards to or invokes Python and serves only its own frontend copies. Keep the Python app unchanged and separate through the final data-fetch speed comparison; decide retirement afterward. Unported native routes remain unavailable until replacements pass acceptance. Never introduce an unapproved Python helper service.
+IDs remain stable; execution is P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 → P41–P52 → P57 → P59–P63. The C# host never forwards to or invokes Python and serves only its own frontend copies. For app independence, run 6B → 7C → 8, then Aadil's 7B speed comparison; keep Python unchanged through acceptance, then do 6A. Unported native routes remain unavailable until replacements pass acceptance. Never introduce an unapproved Python helper service.
 
 Each operation/scope has one active writer. Shadow comparisons use isolated data, not duplicate production imports. Keep shared schemas backward-compatible; reconcile uncertain commits before routing back, never fail over by replaying a write. Rollback never deletes history, drops required columns or overwrites newer unrelated work. Destructive retirement needs protected backups and explicit acceptance/authorization.
 
@@ -495,14 +495,15 @@ Phases 1–2 and 3A–3C are complete; Phase 3D route/package checks were verifi
 | Phase | Work and acceptance gate |
 |---|---|
 | 4 — Setup and packaging | Complete a clean C# install and launch; identify required non-Python items such as PostgreSQL and protected configuration. |
-| 5 — Required tools and migrations | Audit Python-only utilities and prepare .NET/SQL replacements; defer deleting any Python source or launcher until Phase 6. |
-| 7A — Clean-copy proof | Before Python removal, run a clean `dotnet-uploader` copy with Python folders, interpreter and launchers unavailable; record any required non-Python configuration. |
-| 7B — Speed comparison | Compare C# and Python fetching the same data under matching conditions, verify comparable results and record timings. Leave Python unchanged until Aadil accepts this comparison. |
-| 6 — Python removal | After Phases 7A/7B pass and Aadil accepts them, remove Python source, dependencies, launchers and obsolete assets from the product source/package. |
-| 7C — Final independence audit | After Phase 6, scan source/package for Python dependencies and confirm a clean C# build and launch. |
-| 8 — Section-by-section review | After the independence gate, Aadil reviews one C# section at a time; keep unfinished sections unavailable. |
+| 5 — Required tools and migrations | Audit complete. C# runtime, tray, backup/restore and scoped cleanup have no Python launch dependency. The completed one-time migration and historical backfills are offline tools; global index/storage maintenance is optional DBA work, not an app runtime requirement. Keep Python unchanged through C# completion and 7B acceptance. |
+| 7A — Clean-copy proof | Complete: clean `dotnet-uploader` copy built and reached application readiness with Python unavailable; PostgreSQL and protected configuration remain required. |
+| 6B — Test-harness independence | Next: remove or replace Python oracle/browser calls in the C# test suite, preserving parity evidence; C# tests must not need a parent Python `venv`. |
+| 7C — C# independence audit | After 6B and before Phase 8, scan C# source, tests and package for Python imports, launches and links; build and launch with Python unavailable while keeping the separate Python app intact. |
+| 8 — Section-by-section review | After 7C, Aadil reviews each C# section; keep unfinished sections unavailable. |
+| 7B — Post-completion speed comparison | After Phase 8, Aadil compares C# and Python fetching on a representative shared dataset, verifies comparable results and records timings. Keep Python unchanged until he accepts this check. |
+| 6A — Python app removal | After 7B acceptance, remove the legacy Python app, dependencies, launchers and obsolete product assets. |
 
-Revised execution order: 4 → 5 → 7A → 7B → 6 → 7C → 8. The Phase 3B/3C combined commit remains a separate closeout after Aadil's local acceptance and the approved commit message.
+Revised execution order: 4 → 5 → 7A → 6B → 7C → 8 → 7B → 6A. Aadil moved the speed comparison until C# app work is complete on 2026-11-23. Phase 3B/3C was committed as `6aedf97a` on 2026-11-23.
 
 ## P57 Dashboard and error administration
 

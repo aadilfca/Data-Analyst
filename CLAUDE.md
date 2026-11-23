@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Gated C# APIs/jobs, independently packaged frontend under frontend/, acceptance tests and restricted Supabase access. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ + dotnet-uploader/tools/AuditPlatform.FetchBenchmark/ → Gated C# APIs/jobs, independent frontend, standalone Npgsql benchmark, acceptance tests and restricted Supabase access. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -58,7 +58,7 @@ One line per file group: what it is now. Full build history for every entry live
 - routers/database_backup.py + services/database_backup.py + static/setup.* + scripts/rehearse_database_backup.py → Local backups, resumable Drive verification, processing feedback and isolated recovery rehearsals. See CHANGELOG_ARCHIVE.md.
 - tests/test_account_control_center*.py, test_trial_balance_account_flow_safety.py, test_trial_balance_ui.py, test_cashflows*.py, test_reconciliation*.py → Setup, accounting, account-flow safety, API/UI parity, and workbook evidence/export checks. See CHANGELOG_ARCHIVE.md.
 - tests/test_upload*.py, test_data_deletion.py, test_import_duplicate_gates.py + experiments/upload_safety/ → Upload safeguards, browser checks and isolated performance experiments. See CHANGELOG_ARCHIVE.md.
-- experiments/cashflow_fetch/*.py + tests/test_cashflow_fetch_benchmark.py → Standalone read-only transport benchmarks with exact source/report/export comparisons; never loaded by the app. See CHANGELOG_ARCHIVE.md.
+- experiments/cashflow_fetch/*.py + experiments/csharp_fetch_comparison/*.py → Standalone read-only Python/Npgsql fetch and parity benchmarks; never loaded by the app. See CHANGELOG_ARCHIVE.md.
 
 
 - static/reconciliation.html, static/reconciliation.js → Reports, Cashflows and Financial Statements with period labels, notes, nested subtotals/category totals, signs, shortcuts and profit status. See CHANGELOG_ARCHIVE.md.
@@ -270,7 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-23: Docker context excludes Python static files; C# operations guidance reflects completed frontend ownership. Python remains through the speed comparison. See CHANGELOG_ARCHIVE.md.
+- 2026-11-23: Phase 7A passed. Aadil deferred speed comparison until C# app work completes; next is Phase 6B test-harness independence. See CHANGELOG_ARCHIVE.md.
 - 2026-11-22: P62 local readiness, Supabase isolation and Aadil's feature acceptance passed; Render is postponed. See C# local report and Verification acceptance.
 - 2026-11-22: Added the C#-owned dashboard and shared assets; other module pages still use the packaged static fallback. See C# frontend ownership — dashboard.
 - 2026-11-22: Removed C# Python forwarding and bridge ownership switches; Python remains a separate rollback app. See C# bridge retirement.
