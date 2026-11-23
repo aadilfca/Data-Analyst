@@ -6,13 +6,5 @@
 !dotnet-uploader/src/AuditPlatform.Api/**
 !dotnet-uploader/frontend/
 !dotnet-uploader/frontend/**
-!static/
-!static/*.html
-!static/*.js
-!static/*.css
-!static/*.svg
-!static/*.png
-!static/vendor/
-!static/vendor/xlsx.full.min.js
 **/bin
 **/obj

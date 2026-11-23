@@ -270,7 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-23: C# frontend/package isolation verified; Python remains through clean-copy and speed checks before removal. See revised phase order in CHANGELOG_ARCHIVE.md.
+- 2026-11-23: Docker context excludes Python static files; C# operations guidance reflects completed frontend ownership. Python remains through the speed comparison. See CHANGELOG_ARCHIVE.md.
 - 2026-11-22: P62 local readiness, Supabase isolation and Aadil's feature acceptance passed; Render is postponed. See C# local report and Verification acceptance.
 - 2026-11-22: Added the C#-owned dashboard and shared assets; other module pages still use the packaged static fallback. See C# frontend ownership — dashboard.
 - 2026-11-22: Removed C# Python forwarding and bridge ownership switches; Python remains a separate rollback app. See C# bridge retirement.
