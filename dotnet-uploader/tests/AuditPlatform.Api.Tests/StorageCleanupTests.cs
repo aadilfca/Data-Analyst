@@ -316,13 +316,14 @@ public sealed class StorageCleanupTests(ImportGoldenFixture golden) : IClassFixt
         http.DefaultRequestHeaders.Add("Origin",address);
         Assert.Equal(HttpStatusCode.OK,(await http.PostAsJsonAsync("/api/storage-cleanup/apply?client_id=10&template_id=1&kind=plans",planRequest,Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable,(await http.PostAsJsonAsync("/api/storage-cleanup/index-maintenance",new {},Ct)).StatusCode);
-        // Browser owns a separate imported scope, leaving re-upload evidence intact.
+        // Separate native scope leaves re-upload evidence intact.
         await Sql($"INSERT INTO public.upload_validation_plans(plan_id,file_id,client_id,template_id,status,expires_at) VALUES(repeat('e',32),{browserImport.File},10,2,'expired',now()-interval '1 minute')");
-        var pg=new NpgsqlConnectionStringBuilder(fixture.ConnectionString);
-        await File.WriteAllTextAsync(Path.Combine(directory,"fixture.json"),JsonSerializer.Serialize(new {address,port=fixture.Port,database=pg.Database,user=pg.Username,password=pg.Password,context=TenantSessionService.ContextKey(owner)}),Ct);
-        await Python("p33_cleanup_oracle.py",directory);await Python("p33_cleanup_browser.py",directory);
+        var cleanupPage=await http.GetAsync("/static/storage_cleanup.html",Ct);
+        Assert.Equal(HttpStatusCode.OK,cleanupPage.StatusCode);
+        Assert.Equal("text/html",cleanupPage.Content.Headers.ContentType?.MediaType);
         Assert.Equal(0L,await Count("SELECT count(*) FROM public.client_data WHERE client_id=10 AND template_id=2"));
-        bounds.Enabled=false;bounds.PurgeEnabled=false;await Python("p33_cleanup_browser.py",directory,"disabled");
+        bounds.Enabled=false;bounds.PurgeEnabled=false;
+        Assert.Equal("disabled",(await evidence.PreviewAsync(owner,10,2,"purge",Ct)).Status);
         // A provider that becomes public cannot receive deletes. Three failed
         // attempts become durable review, including across worker instances.
         bounds.Enabled=true;bounds.PurgeEnabled=true;
@@ -377,12 +378,4 @@ public sealed class StorageCleanupTests(ImportGoldenFixture golden) : IClassFixt
         s.PostConfigure<UploadValidationPlanOptions>(o=>{o.Enabled=true;o.SigningKey=Convert.ToBase64String(new byte[32]);});s.PostConfigure<UploadImportOptions>(o=>o.Enabled=true);
         s.PostConfigure<StorageCleanupOptions>(o=>{o.Enabled=true;o.PurgeEnabled=true;o.SigningKey=Convert.ToBase64String(Enumerable.Repeat((byte)33,32).ToArray());});
     }));
-    private static async Task Python(string script,string directory,string? mode=null)
-    {
-        var start=new ProcessStartInfo(Path.Combine(Root(),"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(Root(),"tests",script));start.ArgumentList.Add(directory);if(mode is not null) start.ArgumentList.Add(mode);
-        using var p=Process.Start(start)!;var output=p.StandardOutput.ReadToEndAsync();var errors=p.StandardError.ReadToEndAsync();
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Ct);timeout.CancelAfter(TimeSpan.FromMinutes(4));
-        try{await p.WaitForExitAsync(timeout.Token);}catch{p.Kill(entireProcessTree:true);throw;}Assert.True(p.ExitCode==0,await output+await errors);
-    }
 }

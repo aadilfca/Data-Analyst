@@ -305,7 +305,7 @@ tvSearchInput.addEventListener('input', applySearchAndRender);
 // unchanged from before this fix.
 window.onload = async function () {
     if (window.AppNativeDataBank && !window.AppNativeDataBank.enabled) {
-        setStatusMessage('Native Data Bank reads are disabled. Continue using the accepted Python application.');
+        setStatusMessage('Data Bank reads are not enabled in this C# application yet.');
         [tvFetchBtn, tvStartDateInput, tvEndDateInput, tvSearchInput].forEach(el => el.disabled = true);
         setViewerState('empty'); tvEmptyState.textContent = 'Data Bank reads are unavailable.'; return;
     }

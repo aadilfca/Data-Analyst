@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Xml.Linq;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
@@ -28,20 +30,10 @@ public sealed class ReceiptGoldenFixture : IAsyncLifetime
 {
     public string DirectoryPath {get;private set;}="";
     public JsonDocument Oracle {get;private set;}=null!;
-    public async ValueTask InitializeAsync()
-    {
-        DirectoryInfo? root=new(AppContext.BaseDirectory);
-        while(root is not null&&!File.Exists(Path.Combine(root.FullName,"AuditPlatform.slnx"))) root=root.Parent;
-        if(root is null) throw new InvalidOperationException("Solution not found");
-        DirectoryPath=Path.Combine(root.FullName,".tools","p27-tests-"+Guid.NewGuid().ToString("N"));
-        var start=new ProcessStartInfo(Path.Combine(root.FullName,"..","venv","Scripts","python.exe"))
-            {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root.FullName,"tests","p27_import_receipt_oracle.py"));start.ArgumentList.Add(DirectoryPath);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync();var errors=process.StandardError.ReadToEndAsync();
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        try {await process.WaitForExitAsync(deadline.Token);} catch {process.Kill(entireProcessTree:true);throw;}
-        Assert.True(process.ExitCode==0,await output+await errors);
-        Oracle=JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(DirectoryPath,"oracle.json")));
+    public ValueTask InitializeAsync() {
+        DirectoryPath = NativeCompatibilityFixtureFactory.CreateWorkspace("p27", "p27-tests");
+        Oracle = NativeCompatibilityFixtureFactory.ReadOracle(DirectoryPath);
+        return ValueTask.CompletedTask;
     }
     public ValueTask DisposeAsync() {Oracle?.Dispose();return ValueTask.CompletedTask;}
 }
@@ -370,11 +362,61 @@ public sealed class UploadImportReceiptTests(ReceiptGoldenFixture golden) : ICla
         Assert.Equal("unavailable",(await receipts.GetAsync(owner,id,unavailableInput.OperationId,Token)).Receipt!.Reconciliation.Status);
         Assert.Equal(1L,await Count("SELECT count(*) FROM public.client_data WHERE client_id=20 AND row_data->>'sentinel'='unchanged'"));
     }
-    private static async Task VerifyWorkbook(string path,CancellationToken ct,string mode="--verify")
+    private static Task VerifyWorkbook(string path,CancellationToken ct,string mode="--verify")
     {
-        var root=new DirectoryInfo(AppContext.BaseDirectory);while(root is not null&&!File.Exists(Path.Combine(root.FullName,"AuditPlatform.slnx"))) root=root.Parent;
-        var start=new ProcessStartInfo(Path.Combine(root!.FullName,"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root.FullName,"tests","p27_import_receipt_oracle.py"));start.ArgumentList.Add(mode);start.ArgumentList.Add(path);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync();var error=process.StandardError.ReadToEndAsync();await process.WaitForExitAsync(ct);Assert.True(process.ExitCode==0,await output+await error);
+        ct.ThrowIfCancellationRequested();
+        using var archive=ZipFile.OpenRead(path);
+        XNamespace ns="http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        var workbook=Load("xl/workbook.xml");
+        var relationships=Load("xl/_rels/workbook.xml.rels");
+        var targets=relationships.Root!.Elements().ToDictionary(e=>e.Attribute("Id")!.Value,e=>"xl/"+e.Attribute("Target")!.Value.TrimStart('/'));
+        var sheets=workbook.Root!.Element(ns+"sheets")!.Elements(ns+"sheet").ToArray();
+        var names=sheets.Select(sheet=>sheet.Attribute("name")!.Value).ToArray();
+        Assert.Equal(new[]{"Summary","Reconciliation","Issues","Previous rows","Stored rows"},names);
+        var worksheets=sheets.ToDictionary(sheet=>sheet.Attribute("name")!.Value,
+            sheet=>Load(targets[sheet.Attribute(XName.Get("id","http://schemas.openxmlformats.org/officeDocument/2006/relationships"))!.Value]));
+        var shared=archive.GetEntry("xl/sharedStrings.xml") is { } sharedEntry
+            ? XDocument.Load(sharedEntry.Open()).Root!.Elements(ns+"si").Select(item=>string.Concat(item.Descendants(ns+"t").Select(t=>t.Value))).ToArray()
+            : [];
+        string? Cell(string sheet,string reference)
+        {
+            var cell=worksheets[sheet].Root!.Descendants(ns+"c").SingleOrDefault(e=>e.Attribute("r")?.Value==reference);
+            if(cell is null) return null;
+            return cell.Attribute("t")?.Value switch
+            {
+                "s" => shared[int.Parse(cell.Element(ns+"v")!.Value,System.Globalization.CultureInfo.InvariantCulture)],
+                "inlineStr" => string.Concat(cell.Descendants(ns+"t").Select(t=>t.Value)),
+                _ => cell.Element(ns+"v")?.Value
+            };
+        }
+        foreach(var sheet in worksheets.Values)
+        {
+            Assert.Equal("A6",sheet.Root!.Descendants(ns+"pane").FirstOrDefault()?.Attribute("topLeftCell")?.Value);
+            Assert.StartsWith("A5:",sheet.Root.Descendants(ns+"autoFilter").FirstOrDefault()?.Attribute("ref")?.Value);
+            Assert.Equal("landscape",sheet.Root.Descendants(ns+"pageSetup").FirstOrDefault()?.Attribute("orientation")?.Value);
+            Assert.Empty(sheet.Root.Descendants(ns+"f"));
+        }
+        Assert.Equal(7,worksheets["Previous rows"].Root!.Descendants(ns+"row").Count());
+        Assert.Equal(7,worksheets["Stored rows"].Root!.Descendants(ns+"row").Count());
+        Assert.Equal("100",Cell("Previous rows","F6"));Assert.Equal("100",Cell("Previous rows","F7"));
+        Assert.Equal("100",Cell("Stored rows","F6"));Assert.Equal("120",Cell("Stored rows","F7"));
+        Assert.Equal("270",Cell("Reconciliation","C8"));Assert.Equal("0",Cell("Reconciliation","D8"));
+        Assert.Contains("not manager-reviewed",Cell("Summary","B16")!,StringComparison.OrdinalIgnoreCase);
+
+        if(mode=="--verify-edges")
+        {
+            Assert.Equal("0000123",Cell("Stored rows","D6"));Assert.Equal("=HYPERLINK(unsafe)",Cell("Stored rows","E6"));
+            Assert.Equal("123456789012345678901234567890.12345",Cell("Stored rows","F6"));
+            Assert.Equal("1e-1000",Cell("Stored rows","F7"));Assert.Equal("-00123",Cell("Stored rows","H6"));
+            Assert.Equal("+SUM(A1:A9)",Cell("Stored rows","I6"));
+            Assert.Equal("_x005F_x000D_ & < >",Cell("Stored rows","G6"));
+        }
+        return Task.CompletedTask;
+
+        XDocument Load(string entryName)
+        {
+            var entry=archive.GetEntry(entryName)??throw new InvalidDataException($"Workbook entry is missing: {entryName}");
+            using var stream=entry.Open();return XDocument.Load(stream);
+        }
     }
 }

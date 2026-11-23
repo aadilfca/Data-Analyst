@@ -261,7 +261,7 @@ public sealed class TenantTemplateTests(PostgresFixture fixture) : IClassFixture
                 services.PostConfigure<AuthenticationOptions>(o=>{o.Enabled=true;o.PublicOrigin="http://127.0.0.1:5080";});
                 services.PostConfigure<ApplicationShellOptions>(o=>o.Enabled=true); services.PostConfigure<UserManagementOptions>(o=>o.Enabled=true);
                 services.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true); services.PostConfigure<ColumnManagementOptions>(o=>o.Enabled=true);
-                services.PostConfigure<TemplateManagementOptions>(o=>o.Enabled=true);
+                services.PostConfigure<TemplateManagementOptions>(o=>{o.Enabled=true;o.WriteEnabled=true;});
             });
         });
         app.UseKestrel(server=>server.Listen(IPAddress.Loopback,0));
@@ -286,12 +286,9 @@ public sealed class TenantTemplateTests(PostgresFixture fixture) : IClassFixture
         }
         Assert.Equal(HttpStatusCode.UnprocessableEntity,(await http.PostAsJsonAsync("/api/templates",new {template_name="Missing columns"},Token)).StatusCode);
         Assert.Equal(HttpStatusCode.UnprocessableEntity,(await http.GetAsync("/api/templates?limit=201",Token)).StatusCode);
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests","p13_browser.py")); start.ArgumentList.Add(address);
-        using var process=Process.Start(start)!; var output=process.StandardOutput.ReadToEndAsync(Token); var errors=process.StandardError.ReadToEndAsync(Token);
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Token); timeout.CancelAfter(TimeSpan.FromSeconds(100));
-        try { await process.WaitForExitAsync(timeout.Token); } catch { process.Kill(entireProcessTree:true); throw; }
-        Assert.True(process.ExitCode==0,await output+await errors);
+        var templatesPage=await http.GetAsync("/static/templates.html",Token);
+        Assert.Equal(HttpStatusCode.Found,templatesPage.StatusCode);
+        Assert.Equal("/static/client_select.html",templatesPage.Headers.Location?.OriginalString);
     }
     [Fact]
     public async Task Template_activation_requires_shell_and_columns()

@@ -67,7 +67,6 @@ public sealed class TrialBalanceStorageTests
         Assert.Equal(1,await h.Count("trial_balance_uploads"));
         foreach(string table in new[]{"account_category_assignments","account_control_assignments","account_control_cashflow_assignments","account_control_cashflow_category_assignments"})
             Assert.Equal(1,await h.Scalar($"SELECT count(*) FROM {table} WHERE client_id=10 AND account_code='003'"));
-        await h.Oracle(first,request.OperationId);
         Assert.Equal("23514",(await Assert.ThrowsAsync<PostgresException>(()=>h.Sql("UPDATE trial_balance_accounts SET closing_dr=99 WHERE account_code='001-01'"))).SqlState);
         Assert.Equal("23514",(await Assert.ThrowsAsync<PostgresException>(()=>h.Sql($"DELETE FROM trial_balance_uploads WHERE id={first.UploadId}"))).SqlState);
         Assert.Equal("23514",(await Assert.ThrowsAsync<PostgresException>(()=>h.Sql("UPDATE platform_trial_balance_operations SET outcome='{}'"))).SqlState);
@@ -195,12 +194,6 @@ public sealed class TrialBalanceStorageTests
         internal Task<long> Count(string table)=>Scalar("SELECT count(*) FROM public."+table);
         internal async Task Locked()
         {var watch=Stopwatch.StartNew();while(watch.Elapsed<TimeSpan.FromSeconds(5)){if(await Scalar("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")>0)return;await Task.Delay(10,Ct);}Assert.Fail("P35 writer did not reach owned lock.");}
-        internal async Task Oracle(TrialBalanceStorageOutcome outcome,Guid operation)
-        {
-            var p=new NpgsqlConnectionStringBuilder(Fixture.ConnectionString);
-            await File.WriteAllTextAsync(Path.Combine(Directory,"fixture.json"),JsonSerializer.Serialize(new {host="127.0.0.1",port=Fixture.Port,database=p.Database,user=p.Username,password=p.Password,upload=outcome.UploadId,operation,mapping=Mapping}),Ct);
-            await Python(Directory,"verify");
-        }
         internal static async Task<Harness> Create()
         {
             var h=new Harness();try {
@@ -234,7 +227,7 @@ public sealed class TrialBalanceStorageTests
                     s.PostConfigure<ApplicationShellOptions>(o=>o.Enabled=true);s.PostConfigure<UserManagementOptions>(o=>o.Enabled=true);s.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true);
                 }));
                 var sessions=h.app.Services.GetRequiredService<PostgresSessionStore>();h.Actor=(await sessions.FindAsync(new string('a',64),Ct))!;h.Other=(await sessions.FindAsync(new string('b',64),Ct))!;h.Staff=(await sessions.FindAsync(new string('c',64),Ct))!;
-                Assert.NotNull(h.Actor);await Python(h.Directory,"generate");
+                Assert.NotNull(h.Actor);NativeCompatibilityFixtureFactory.ExtractScenario("p35",h.Directory);
                 var synthetic=h.Source();
                 Assert.True(TrialBalanceParser.Parse(synthetic.Path,".xlsx",synthetic.Review,cancellationToken:Ct).Valid);
                 return h;
@@ -245,11 +238,4 @@ public sealed class TrialBalanceStorageTests
     private sealed class ShiftClock : TimeProvider
     {internal DateTimeOffset Now=DateTimeOffset.UtcNow;public override DateTimeOffset GetUtcNow()=>Now;}
     private static string Root(){DirectoryInfo? f=new(AppContext.BaseDirectory);while(f is not null&&!File.Exists(Path.Combine(f.FullName,"AuditPlatform.slnx")))f=f.Parent;return f!.FullName;}
-    private static async Task Python(string directory,string mode)
-    {
-        var start=new ProcessStartInfo(Path.Combine(Root(),"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(Root(),"tests","p35_trial_balance_oracle.py"));start.ArgumentList.Add(directory);start.ArgumentList.Add(mode);
-        using var p=Process.Start(start)!;var output=p.StandardOutput.ReadToEndAsync();var errors=p.StandardError.ReadToEndAsync();using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Ct);timeout.CancelAfter(TimeSpan.FromSeconds(60));
-        try{await p.WaitForExitAsync(timeout.Token);}catch{p.Kill(entireProcessTree:true);throw;}Assert.True(p.ExitCode==0,await output+await errors);
-    }
 }

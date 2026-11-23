@@ -28,20 +28,10 @@ public sealed class InputValidationGoldenFixture : IAsyncLifetime
 {
     public string DirectoryPath {get;private set;}="";
     public JsonDocument Oracle {get;private set;}=null!;
-    public async ValueTask InitializeAsync()
-    {
-        DirectoryInfo? root=new(AppContext.BaseDirectory);
-        while(root is not null && !File.Exists(Path.Combine(root.FullName,"AuditPlatform.slnx"))) root=root.Parent;
-        if(root is null) throw new InvalidOperationException("Solution not found");
-        DirectoryPath=Path.Combine(root.FullName,".tools","p19-tests-"+Guid.NewGuid().ToString("N"));
-        var start=new ProcessStartInfo(Path.Combine(root.FullName,"..","venv","Scripts","python.exe"))
-            {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root.FullName,"tests","p19_validation_oracle.py"));start.ArgumentList.Add(DirectoryPath);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync();var errors=process.StandardError.ReadToEndAsync();
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        try {await process.WaitForExitAsync(deadline.Token);} catch {process.Kill(entireProcessTree:true);throw;}
-        Assert.True(process.ExitCode==0,await output+await errors);
-        Oracle=JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(DirectoryPath,"oracle.json")));
+    public ValueTask InitializeAsync() {
+        DirectoryPath = NativeCompatibilityFixtureFactory.CreateWorkspace("p19", "p19-tests");
+        Oracle = NativeCompatibilityFixtureFactory.ReadOracle(DirectoryPath);
+        return ValueTask.CompletedTask;
     }
     public ValueTask DisposeAsync() {Oracle?.Dispose();return ValueTask.CompletedTask;}
 }

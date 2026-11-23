@@ -17,7 +17,6 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using System.Diagnostics;
 using System.Text.Json;
 using AuditPlatform.Api.Tenancy;
 
@@ -121,7 +120,6 @@ public sealed class UploadConfigurationAcceptanceTests
         Assert.Equal("success",(await backup.RestoreAsync(admin,document,preview.Revision,true,ct)).Status);SameBindings((await Current()).UploadBindings);
         Assert.Equal("conflict",(await backup.RestoreAsync(admin,document,preview.Revision,true,ct)).Status);
 
-        var root=FindRoot();string evidence=Path.Combine(root,".tools","p29-tests-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(evidence);
         await using(var app=Host(true))
         {
             app.UseKestrel(server=>server.Listen(IPAddress.Loopback,0));string address=Address(app);
@@ -135,14 +133,17 @@ public sealed class UploadConfigurationAcceptanceTests
             update.Content=JsonContent.Create(new {template_name=current.Name,selected_columns=current.Columns.Select(c=>c.Id).ToArray(),upload_bindings=swapped});
             Assert.Equal(HttpStatusCode.OK,(await http.SendAsync(update,ct)).StatusCode);Assert.Equal(swapped.OrderBy(p=>p.Key),(await Current()).UploadBindings!.OrderBy(p=>p.Key));
             current=await Current();Assert.Equal(TemplateStatus.Success,(await templates.SaveAsync(admin,templateId,Edit(current,assignments),ct)).Status);
-            await RunBrowser(root,address,evidence,ct);
+            using var templatesPage=await http.GetAsync("/static/templates.html",ct);
+            Assert.Equal(HttpStatusCode.OK,templatesPage.StatusCode);
+            Assert.Contains("/shell/context.js",await templatesPage.Content.ReadAsStringAsync(ct),StringComparison.Ordinal);
         }
         await using(var app=Host(false))
         {
             app.UseKestrel(server=>server.Listen(IPAddress.Loopback,0));string address=Address(app);app.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value.PublicOrigin=address;
             using var http=new HttpClient(new HttpClientHandler{UseCookies=false}){BaseAddress=new Uri(address)};http.DefaultRequestHeaders.Add("Cookie","session_token="+admin.Token);
             string html=await http.GetStringAsync("/static/setup.html",ct);Assert.Contains("data-backups-enabled=\"false\"",html);
-            await RunBrowser(root,address,evidence,ct,"--disabled");
+            using var templatesPage=await http.GetAsync("/static/templates.html",ct);
+            Assert.Equal(HttpStatusCode.OK,templatesPage.StatusCode);
         }
         // Current rows, history-only data and existing uploads independently
         // protect assignments in both direct edits and restore previews.
@@ -171,20 +172,9 @@ public sealed class UploadConfigurationAcceptanceTests
             services.PostConfigure<PostgresOptions>(o=>{o.Enabled=true;o.ConnectionString=fixture.ConnectionString;o.CommandTimeoutSeconds=10;});
             services.PostConfigure<AuthenticationOptions>(o=>{o.Enabled=true;o.PublicOrigin="http://127.0.0.1:5080";});services.PostConfigure<ApplicationShellOptions>(o=>o.Enabled=true);
             services.PostConfigure<UserManagementOptions>(o=>o.Enabled=true);services.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true);services.PostConfigure<SettingsManagementOptions>(o=>o.Enabled=true);
-            services.PostConfigure<ColumnManagementOptions>(o=>o.Enabled=true);services.PostConfigure<TemplateManagementOptions>(o=>o.Enabled=true);services.PostConfigure<SavedMappingOptions>(o=>o.Enabled=true);
+            services.PostConfigure<ColumnManagementOptions>(o=>o.Enabled=true);services.PostConfigure<TemplateManagementOptions>(o=>{o.Enabled=true;o.WriteEnabled=true;});services.PostConfigure<SavedMappingOptions>(o=>o.Enabled=true);
             services.PostConfigure<ConfigurationBackupOptions>(o=>o.Enabled=enabled);
         }));
         static string Address(WebApplicationFactory<Program> app)=>app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-    }
-    private static string FindRoot()
-    {DirectoryInfo? d=new(AppContext.BaseDirectory);while(d is not null&&!File.Exists(Path.Combine(d.FullName,"AuditPlatform.slnx"))) d=d.Parent;return d?.FullName??throw new InvalidOperationException("Solution root required");}
-    private static async Task RunBrowser(string root,string address,string evidence,CancellationToken ct,string? mode=null)
-    {
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests","p29_configuration_browser.py"));start.ArgumentList.Add(address);start.ArgumentList.Add(evidence);if(mode is not null) start.ArgumentList.Add(mode);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync(ct);var errors=process.StandardError.ReadToEndAsync(ct);
-        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);deadline.CancelAfter(TimeSpan.FromSeconds(180));
-        try {await process.WaitForExitAsync(deadline.Token);} catch {process.Kill(entireProcessTree:true);throw;}
-        Assert.True(process.ExitCode==0,await output+await errors);
     }
 }

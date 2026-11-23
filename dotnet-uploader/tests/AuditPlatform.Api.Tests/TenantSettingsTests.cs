@@ -195,14 +195,9 @@ public sealed class TenantSettingsTests(PostgresFixture fixture) : IClassFixture
         Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/api/settings/holidays",Token)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden,(await http.PostAsJsonAsync("/api/settings/date_format",new {value="DD/MM/YYYY"},Token)).StatusCode);
 
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe"))
-        {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests","p11_browser.py")); start.ArgumentList.Add(origin);
-        using var process=Process.Start(start)!;
-        var output=process.StandardOutput.ReadToEndAsync(Token); var errors=process.StandardError.ReadToEndAsync(Token);
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Token); timeout.CancelAfter(TimeSpan.FromSeconds(90));
-        try { await process.WaitForExitAsync(timeout.Token); } catch { process.Kill(entireProcessTree:true); throw; }
-        Assert.True(process.ExitCode==0,await output+await errors);
+        var settingsPage=await http.GetAsync("/static/settings.html",Token);
+        Assert.Equal(HttpStatusCode.OK,settingsPage.StatusCode);
+        Assert.Equal("text/html",settingsPage.Content.Headers.ContentType?.MediaType);
     }
     private static string FindRoot()
     {

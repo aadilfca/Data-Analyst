@@ -277,12 +277,9 @@ public sealed class TenantMappingTests(PostgresFixture fixture) : IClassFixture<
         Assert.Equal(HttpStatusCode.UnprocessableEntity,(await http.PostAsJsonAsync("/api/upload/save-mapping",new {client_id=10,template_id=id},Token)).StatusCode);
         Assert.Equal(HttpStatusCode.UnprocessableEntity,(await http.PostAsJsonAsync("/api/upload/save-mapping",new {client_id=10,template_id=id,
             mappings=new object?[] {null},mapping_revision=0,configuration_key="redacted"},Token)).StatusCode);
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests","p14_browser.py")); start.ArgumentList.Add(address); start.ArgumentList.Add(browserId.ToString()); start.ArgumentList.Add(cId.ToString());
-        using var process=Process.Start(start)!; var output=process.StandardOutput.ReadToEndAsync(Token); var errors=process.StandardError.ReadToEndAsync(Token);
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Token); timeout.CancelAfter(TimeSpan.FromSeconds(100));
-        try { await process.WaitForExitAsync(timeout.Token); } catch { process.Kill(entireProcessTree:true); throw; }
-        Assert.True(process.ExitCode==0,await output+await errors);
+        var mappingPage=await http.GetAsync("/static/index.html",Token);
+        Assert.Equal(HttpStatusCode.OK,mappingPage.StatusCode);
+        Assert.Equal("text/html",mappingPage.Content.Headers.ContentType?.MediaType);
     }
     [Fact]
     public async Task Saved_mapping_activation_requires_native_templates()

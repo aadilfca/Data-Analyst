@@ -15,16 +15,10 @@ public sealed class TrialBalanceGoldenFixture : IAsyncLifetime
     public JsonDocument Oracle {get;private set;}=null!;
     public static string Root()
     {for(var d=new DirectoryInfo(AppContext.BaseDirectory);d is not null;d=d.Parent) if(File.Exists(Path.Combine(d.FullName,"AuditPlatform.slnx"))) return d.FullName;throw new InvalidOperationException("Solution not found");}
-    public async ValueTask InitializeAsync()
-    {
-        string root=Root();DirectoryPath=Path.Combine(root,".tools","p34-"+Guid.NewGuid().ToString("N"));
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests","p34_trial_balance_oracle.py"));start.ArgumentList.Add(DirectoryPath);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync();var errors=process.StandardError.ReadToEndAsync();
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        try {await process.WaitForExitAsync(deadline.Token);}catch{process.Kill(entireProcessTree:true);throw;}
-        Assert.True(process.ExitCode==0,await output+await errors);
-        Oracle=JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(DirectoryPath,"oracle.json")));
+    public ValueTask InitializeAsync() {
+        DirectoryPath = NativeCompatibilityFixtureFactory.CreateWorkspace("p34", "p34-tests");
+        Oracle = NativeCompatibilityFixtureFactory.ReadOracle(DirectoryPath);
+        return ValueTask.CompletedTask;
     }
     public ValueTask DisposeAsync() {Oracle?.Dispose();return ValueTask.CompletedTask;}
 }

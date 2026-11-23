@@ -95,7 +95,10 @@ public sealed class DataBankHistoryExportTests
             """);
         await using var app = Host(fixture); app.UseKestrel(server => server.Listen(IPAddress.Loopback,0));
         string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single(); app.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value.PublicOrigin = address;
+        using var http=new HttpClient(new HttpClientHandler{UseCookies=false}){BaseAddress=new Uri(address)};
         var sessions=app.Services.GetRequiredService<PostgresSessionStore>(); var actor=(await sessions.FindAsync(new string('a',64),Ct))!; var staff=(await sessions.FindAsync(new string('c',64),Ct))!;
+        http.DefaultRequestHeaders.Add("Cookie","session_token="+actor.Token);
+        http.DefaultRequestHeaders.Add("X-App-Context",AuditPlatform.Api.Tenancy.TenantSessionService.ContextKey(actor));
         var reads=app.Services.GetRequiredService<DataBankService>(); var exports=app.Services.GetRequiredService<DataBankExportService>();
         var flags=app.Services.GetRequiredService<IOptions<DataBankOptions>>().Value; var bounds=app.Services.GetRequiredService<IOptions<DataBankExportOptions>>().Value;
         DataBankQuery History(int template=1)=>new("history",10,template,Limit:2);
@@ -158,10 +161,12 @@ public sealed class DataBankHistoryExportTests
             using var cancel=CancellationTokenSource.CreateLinkedTokenSource(Ct);cancel.CancelAfter(200);await Assert.ThrowsAnyAsync<OperationCanceledException>(()=>exports.DownloadAsync(actor,Preview(),false,cancel.Token));
             bounds.TimeoutSeconds=1;Assert.Equal("timeout",(await exports.DownloadAsync(actor,Preview(),false,Ct)).Status);bounds.TimeoutSeconds=60;await transaction.RollbackAsync(Ct);
         }
-        var pg=new NpgsqlConnectionStringBuilder(fixture.ConnectionString);
-        await File.WriteAllTextAsync(Path.Combine(directory,"fixture.json"),JsonSerializer.Serialize(new {address,port=fixture.Port,database=pg.Database,user=pg.Username,password=pg.Password,cases,large_ms=milliseconds,peak_working_set_bytes=Process.GetCurrentProcess().PeakWorkingSet64}),Ct);
-        await Python(root,"p31_databank_oracle.py",directory);await Python(root,"p31_databank_browser.py",directory);
-        flags.HistoryEnabled=false;bounds.Enabled=false;await Python(root,"p31_databank_browser.py",directory,"disabled");
+        var dataBankPage=await http.GetAsync("/static/databank.html",Ct);
+        Assert.Equal(HttpStatusCode.OK,dataBankPage.StatusCode);
+        Assert.Equal("text/html",dataBankPage.Content.Headers.ContentType?.MediaType);
+        flags.HistoryEnabled=false;bounds.Enabled=false;
+        var disabled=await exports.DownloadAsync(actor,Preview(),false,Ct);
+        Assert.Equal("unavailable",disabled.Status);Assert.Equal("databank_exports_disabled",disabled.Code);
         Assert.Equal(before,await Snapshot());TestContext.Current.TestOutputHelper!.WriteLine("P31 owned evidence: "+directory);
     }
     private static async Task Locked(NpgsqlConnection connection)
@@ -175,9 +180,4 @@ public sealed class DataBankHistoryExportTests
         s.PostConfigure<ColumnManagementOptions>(o=>o.Enabled=true);s.PostConfigure<TemplateManagementOptions>(o=>o.Enabled=true);s.PostConfigure<SettingsManagementOptions>(o=>o.Enabled=true);s.PostConfigure<DataBankOptions>(o=>o.Enabled=true);
     }));
     private static string Root(){DirectoryInfo? f=new(AppContext.BaseDirectory);while(f is not null&&!File.Exists(Path.Combine(f.FullName,"AuditPlatform.slnx"))) f=f.Parent;return f!.FullName;}
-    private static async Task Python(string root,string script,string directory,string? mode=null)
-    {
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};start.ArgumentList.Add(Path.Combine(root,"tests",script));start.ArgumentList.Add(directory);if(mode is not null)start.ArgumentList.Add(mode);
-        using var p=Process.Start(start)!;var output=p.StandardOutput.ReadToEndAsync();var errors=p.StandardError.ReadToEndAsync();using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Ct);timeout.CancelAfter(TimeSpan.FromMinutes(4));try{await p.WaitForExitAsync(timeout.Token);}catch{p.Kill(entireProcessTree:true);throw;}Assert.True(p.ExitCode==0,await output+await errors);
-    }
 }

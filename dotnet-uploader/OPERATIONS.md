@@ -65,7 +65,7 @@ These commands do not create or migrate a database. Apply only reviewed migratio
 
 Migrations `0024`/`0026` and promotion of verified legacy template definitions are complete on the dedicated project. Do not repeat those steps without a fresh preview. Keep module feature switches unchanged unless separately accepted. Historical-evidence, Ledger, remaining-settings and report-ownership adoption remain separate gates; see `CHANGELOG_ARCHIVE.md`. Do not copy client transaction rows.
 
-`start_tray.vbs`, `tray_control.py`, `run.bat`, and the Python app remain separate and unchanged through the final C# versus Python data-fetch speed comparison. The C# tray never invokes them; any later retirement needs separate approval.
+`start_tray.vbs`, `tray_control.py`, `run.bat`, and the Python app are separate from the C# launch path. The C# tray never invokes them; deleting the separate app or launchers is outside C# acceptance and requires a separate request.
 
 ## P62 Render candidate — postponed
 
@@ -73,7 +73,7 @@ Aadil postponed hosting selection and Render work. Do not configure, preview, or
 
 The Data API is off and `runtime_api_isolation.sql` has been applied and verified on the dedicated C# project. Browser pages use the C# API and its restricted server-side PostgreSQL login. RLS remains unchanged until compatible runtime-role policies are reviewed. See `POSTGRES_SCHEMA_OWNERSHIP.md`.
 
-The C# Docker build copies only `dotnet-uploader/src/AuditPlatform.Api` and `dotnet-uploader/frontend`; `Dockerfile.dockerignore` excludes the repository's root `static/` from the build context. Phase 3 frontend ownership is complete. Keep the separate Python launcher/service unchanged through Phase 7B's speed comparison. Render remains postponed; `render-csharp-p62.yaml` is inactive, and no Render service is managed here.
+The C# Docker build copies only `dotnet-uploader/src/AuditPlatform.Api` and `dotnet-uploader/frontend`; `Dockerfile.dockerignore` excludes the repository's root `static/` from the build context. Phase 3 frontend ownership is complete. The separate Python app is outside the C# image and launch path. Render remains postponed; `render-csharp-p62.yaml` is inactive, and no Render service is managed here.
 
 The candidate uses Render's Singapore region and Free web plan only for short-lived, non-production rehearsal. Free services can sleep and have limited resources; this is not a production plan. Confirm that Singapore is near the separate test database before creating the service because Render does not let an existing service change region. Current Render pricing lists the smallest always-on paid web plan at $7/month (0.5 CPU, 512 MB RAM); that is a price baseline, not a capacity recommendation, and excludes database, bandwidth, storage and workspace costs. Production sizing and spend still need approval. See [Render regions](https://render.com/docs/regions), [compute plans](https://render.com/docs/compute-plans), and [pricing](https://render.com/pricing).
 
@@ -83,9 +83,9 @@ No persistent disk is configured because local database backup and upload-job fe
 
 The Linux image built locally on 2026-11-19. A loopback container used the configured development Supabase connection and its TLS certificate mounted read-only. `/healthz`, `/health/app-ready`, and the login page returned 200; `/health/ready` had one startup timeout, then passed five consecutive checks. The root redirected to login and an unauthenticated current-client request returned 401. User/client writes, backups, and upload jobs stayed off. The temporary container was removed; the image remains local and the tray server on port 5080 was untouched. Aadil confirmed local feature acceptance; Render hosting is postponed.
 
-P62 local readiness, Supabase isolation and Aadil's manual feature review are complete. No Render preview service was created. Keep Python separate and unchanged through the final speed comparison.
+P62 local readiness, Supabase isolation and Aadil's manual feature review are complete. No Render preview service was created. The Python app remains a separate application, outside C# runtime and package requirements.
 
-P61 system readiness and P62 local feature acceptance are complete. P63 remains a separate gate requiring a provider choice, staging rehearsal, provider backup/recovery baselines, a protected recovery copy on another device, and Aadil's explicit cutover approval. Python retirement is deferred until after the final speed comparison.
+P61 system readiness and P62 local feature acceptance are complete. P63 remains a separate gate requiring a provider choice, staging rehearsal, provider backup/recovery baselines, a protected recovery copy on another device, and Aadil's explicit cutover approval. It does not include removal of the separate Python app.
 
 ## Owned local workspace adoption
 
@@ -115,7 +115,7 @@ From `dotnet-uploader/`, run `./.dotnet/dotnet.exe run --project ./tools/AuditPl
 
 `tools/AuditPlatform.FirstRunSetup` is a one-time controlled setup tool for the dedicated C# development project. Run it only after the empty schema and prerequisite migrations have been separately reviewed and applied. The shared owner password must be rotated before production use. From `dotnet-uploader/`, use `\.dotnet\dotnet.exe run --project .\tools\AuditPlatform.FirstRunSetup`. The tool prompts for the direct or Session Pooler endpoint, asks for the owner password without echoing it, and requires the Supabase Root 2021 CA file. It enforces `SSL Mode=VerifyFull`, checks the project-specific host/username format and TLS session, and stops unless the required login/workspace/client/audit schema is present and the application tables are empty (apart from the standard unknown-error reference row).
 
-Review the on-screen preview and type the exact project confirmation before it writes one workspace-scoped administrator (the global legacy role stays empty), one `audit_firm` workspace, one admin membership, one blank client card, its workspace link and one system audit event in a single transaction. It does not create tables, roles, grants or migrations, copy reusable definitions or client transactions, or turn on application features. If the commit result is uncertain, inspect the database before any retry. The Python app remains separate for the final speed comparison.
+Review the on-screen preview and type the exact project confirmation before it writes one workspace-scoped administrator (the global legacy role stays empty), one `audit_firm` workspace, one admin membership, one blank client card, its workspace link and one system audit event in a single transaction. It does not create tables, roles, grants or migrations, copy reusable definitions or client transactions, or turn on application features. If the commit result is uncertain, inspect the database before any retry. C# setup does not use the separate Python app.
 
 ### Restricted runtime login
 
@@ -127,9 +127,9 @@ For runtime role creation, password setup, grants, and secret storage, follow th
 |---|---|
 | C# Setup full-database backup and isolated restore | P59 native replacement; local acceptance and separate-device recovery copy remain pending. |
 | C# Data Bank current/history workbook before selected-template purge | Existing P33 behavior; required proof gate stays in front of purge. |
-| `storage_cleanup.py`, `audit_postgres_indexes.py` | Optional Python global maintenance for the rollback app; not a C# runtime dependency. No global index-removal command is exposed in C#. Use approved PostgreSQL administrator/provider tooling if such maintenance is needed after Python retirement. |
+| `storage_cleanup.py`, `audit_postgres_indexes.py` | Optional maintenance for the separate Python app; not a C# runtime dependency. No global index-removal command is exposed in C#. Use approved PostgreSQL administrator/provider tooling if the legacy app is ever retired. |
 | `backfill_rate.py`, `backfill_extract_amount.py`, and `scripts/backfill_*.py` | Historical/repair scripts, not C# startup tasks. Keep offline and review each against current schema/data before any rerun. The Cash/Bank classification script writes unless `--dry-run` is supplied. |
 | `scripts/rehearse_database_backup.py` | Legacy Python recovery rehearsal; retain as rollback evidence. C# isolated restore has its own fixture test. |
-| Python test and experiment files | Not C# runtime dependencies, but 25 C# test files currently call 31 Python oracle/browser scripts. Keep through the 7B comparison, then remove or replace these calls in Phase 6B before the final Python-free source audit. |
+| Python test and experiment files | Not C# dependencies. Phase 6B replaced C# test launches with fixed fixtures and C# HTTP checks; the C# test project does not require a parent Python `venv`. |
 
-No Python operational file is invoked by the C# tray. Retain Python launchers through the final speed comparison; any later retirement needs a separate inventory-backed approval.
+No Python operational file is invoked by the C# tray. Retirement of the separate Python app or its launchers is outside this plan and requires a separate inventory-backed request.

@@ -186,12 +186,11 @@ public sealed class DataBankTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable,(await http.PutAsync("/api/data/upload-frequency",new StringContent("{}"),Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict,(await http.GetAsync("/api/data/preview?client_id=10&template_id=1&date_start=2026-04-01&date_end=2026-04-30&document_id=3",Ct)).StatusCode);
         string root=Root(), directory=Path.Combine(root,".tools","p30-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
-        var settings=new NpgsqlConnectionStringBuilder(fixture.ConnectionString);
-        await File.WriteAllTextAsync(Path.Combine(directory,"fixture.json"),JsonSerializer.Serialize(new {address,port=fixture.Port,database=settings.Database,user=settings.Username,password=settings.Password,expected}),Ct);
-        await Python(root,"p30_databank_oracle.py",directory);
-        await Python(root,"p30_databank_browser.py",directory);
+        var dataBankPage=await http.GetAsync("/static/databank.html",Ct);
+        Assert.Equal(HttpStatusCode.OK,dataBankPage.StatusCode);
+        Assert.Equal("text/html",dataBankPage.Content.Headers.ContentType?.MediaType);
         options.Enabled=false;
-        await Python(root,"p30_databank_browser.py",directory,"disabled");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,(await http.GetAsync("/api/data/availability",Ct)).StatusCode);
         Assert.Equal(before,await Snapshot());
         TestContext.Current.TestOutputHelper!.WriteLine("Owned P30 artifacts: "+directory);
     }
@@ -203,13 +202,4 @@ public sealed class DataBankTests
         s.PostConfigure<ColumnManagementOptions>(o=>o.Enabled=true);s.PostConfigure<TemplateManagementOptions>(o=>o.Enabled=true);s.PostConfigure<SettingsManagementOptions>(o=>o.Enabled=true);s.PostConfigure<DataBankOptions>(o=>o.Enabled=true);
     }));
     private static string Root() {DirectoryInfo? folder=new(AppContext.BaseDirectory);while(folder is not null&&!File.Exists(Path.Combine(folder.FullName,"AuditPlatform.slnx"))) folder=folder.Parent;return folder!.FullName;}
-    private static async Task Python(string root,string script,string directory,string? mode=null)
-    {
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests",script));start.ArgumentList.Add(directory);if(mode is not null) start.ArgumentList.Add(mode);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync();var errors=process.StandardError.ReadToEndAsync();
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Ct);timeout.CancelAfter(TimeSpan.FromMinutes(4));
-        try{await process.WaitForExitAsync(timeout.Token);}catch{process.Kill(entireProcessTree:true);throw;}
-        Assert.True(process.ExitCode==0,await output+await errors);
-    }
 }

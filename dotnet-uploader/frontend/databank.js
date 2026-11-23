@@ -3431,7 +3431,7 @@ window.onload = async function() {
     showClientDataLoading();
     if (!nativeReadAvailable()) {
         await hideClientDataLoading();
-        showStatus('Native Data Bank reads are disabled. Continue using the accepted Python application.', 'info');
+        showStatus('Data Bank reads are not enabled in this C# application yet.', 'info');
         resetDatasetTables('Data Bank reads are unavailable.');
         document.querySelectorAll('.main-content button, .main-content input, #uploadMoreBtn').forEach(el => el.disabled = true);
         return;

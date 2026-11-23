@@ -1,8 +1,8 @@
-# .NET Application Migration — Codex Plan
+# C# Application — Codex Plan
 
 ## Purpose and status
 
-Migrate the complete application backend, frontend, financial calculations, reports, Excel exports and jobs to ASP.NET Core/C#. The folder remains `dotnet-uploader/`; `AuditPlatform.Api` provides the service foundation. Keep the Python app separate and unchanged through the final data-fetch speed comparison; it is never a C# runtime or package dependency.
+Develop the complete application as a standalone ASP.NET Core/C# app in `dotnet-uploader/`. Its source, tests, build and package must not require Python. The separate Python app is outside this plan; do not remove or depend on it.
 
 Plan dated 2026-11-10; Aadil approved full C# reporting and reports-before-audit sequencing on 2026-11-11. P01–P07 are locally accepted. See [MIGRATION_BASELINE.md](MIGRATION_BASELINE.md), [migration-baseline.json](migration-baseline.json), and [current contracts](MIGRATION_CONTRACTS.md). Each implementation phase requires file/approach approval.
 
@@ -24,7 +24,7 @@ From this folder, use `.\.dotnet\dotnet.exe`, not `dotnet` from PATH. `global.js
 - **Staged workbooks:** if jobs must survive a restart or deploy, use private, short-retention object storage. Never put client workbooks or database backups in Git. Render's service filesystem is ephemeral by default.
 - **Authentication:** initially preserve existing `users`/`sessions`, password-hash compatibility, and selected-client behavior. Enforce server-side authorization on every protected operation; use secure, HttpOnly, SameSite cookies and CSRF protection for writes.
 - **Hosting and operations:** Docker deployment is suitable for Render. Keep the service near Supabase; Singapore is Render's listed Asian region. Confirm worker availability and monthly cost before production hosting.
-- **Verification:** use xUnit and ASP.NET Core `WebApplicationFactory` with a dedicated isolated PostgreSQL database. Compare against golden workbooks and Python report outputs; never rehearse imports against live client data.
+- **Verification:** use xUnit, fixed synthetic fixtures and ASP.NET Core `WebApplicationFactory` with an isolated PostgreSQL database. Preserve golden workbook/results parity; never start Python or rehearse imports against live client data.
 
 ## Ownership and report boundary
 
@@ -109,10 +109,10 @@ Execution order: P06 → P07 → P07A–P07C → P08–P40 → P53A–P56 (repor
 | P52 — Audit Workbook | Port Workbook reads, filters, badges, print data, and operational exports; verify shared-modal behavior and Verification parity. |
 | P57 — Dashboard/admin | Backend implementation accepted; default-off workspace statistics and administrator error APIs. Candidate `0023` remains unapplied; selected workflow review is deferred to P62 staging. See CHANGELOG_ARCHIVE.md. |
 | P59 — Backups | Implemented default-off local C# full-database ZIP and isolated restore; existing C# current/history workbook proof gates selected-template purge. No Drive integration or live migration. Automated checks pass; Aadil's C# Setup test remains. See CHANGELOG_ARCHIVE.md. |
-| P60 — Operational tools | Added a separate C# tray launcher with actionable readiness diagnostics and per-user local configuration guidance; Python remains separate for the final speed comparison. Manual tray/database check remains. No Python tool retired. |
+| P60 — Operational tools | Added a separate C# tray launcher with readiness diagnostics and per-user local configuration guidance. Manual tray/database check remains; the legacy Python app stays outside C# runtime and package scope. |
 | P61 — System readiness | Database foundation 33/33 and backup/recovery 3/3 pass; configured local server, readiness, login shell and tray checks are accepted. Feature acceptance is deferred to P62. |
 | P62 — Deployment rehearsal | Non-Render Linux container and Supabase readiness passed; API-role grants are isolated. Render preview is excluded; Aadil's selected-feature acceptance remains. |
-| P63 — Controlled cutover | Separate production gate: requires staging acceptance, protected recovery copy on a different device, provider baseline and explicit cutover approval. Python retirement follows the final speed comparison. |
+| P63 — Controlled cutover | Separate production gate: requires staging acceptance, protected recovery copy on a different device, provider baseline and explicit cutover approval. It does not require removing the separate Python app. |
 
 ## Remaining cutover work packages
 
@@ -125,7 +125,7 @@ These packages use the existing phase IDs; finish each before its dependent pack
 | 3A. Inventory | Map every page, script, style, asset and API call; classify active, retired or unavailable. |
 | 3B. C# ownership | Create independent `frontend/` copies for every active C# page and required asset; point them to C# APIs and exclude Google Drive. |
 | 3C. Host/package | Serve and package only `frontend/`; remove root `static/` fallback and build inputs. Unported pages state that they are unavailable. |
-| 3D. Proof | Verify page/API coverage and inspect the built package for root-static, Python and Google Drive runtime assets. Keep Python unchanged for the final speed comparison. |
+| 3D. Proof | Verify page/API coverage and inspect the built package for root-static, Python and Google Drive runtime assets. The separate Python app is not part of C# acceptance. |
 
 | Package | Result required |
 |---|---|
@@ -180,7 +180,7 @@ $env:NUGET_PACKAGES = "$PWD\.tools\packages"
 - `PostgresAuditWriter` requires the supplied write context and trusted server inputs; module ports integrate it with their mutations. Diagnostic capture uses safe symbols and route templates. `LogPersistence__...` limits are defined in [the audit/error contract](AUDIT_ERROR_CONTRACT.md); diagnostics never read request bodies, queries or cookies.
 - Candidate `database/migrations/0001_audit_error.sql` is executed only by owned test fixtures here. Runtime startup performs no DDL. Deployed catalog/capacity evidence and explicit execution approval remain required; P05C handles historical reconciliation and P07/P57 authentication/dashboard integration.
 - `tools/AuditPlatform.LogRehearsal` uses the installed ASP.NET shared runtime and existing packages, but starts no web host. Tests generate owned PostgreSQL clusters and synthetic JSON; the CLI requires `--input`/`--owner-dir` plus secret environment variable `AUDIT_REHEARSAL_CONNECTION`. Input stays in that owned run directory; it does not read SQLite or Python settings. See [reconciliation gates](AUDIT_ERROR_CONTRACT.md#historical-reconciliation-and-delivery-gates).
-- The P06 forwarding bridge is removed. Keep Python as a separate, unchanged comparison app through the final speed test; C# never invokes it. Native modules remain individually gated. P07 authentication is disabled by default.
+- The P06 forwarding bridge is removed. The separate legacy Python app is outside C# runtime, tests and package; no Python speed comparison or removal is a C# phase. Native modules remain individually gated. P07 authentication is disabled by default.
 - P07 requires `Authentication__Enabled=true` and a canonical `Authentication__PublicOrigin`; HTTP is limited to localhost. Shared audit schema verification and separate approval precede deployment.
 - P07B's candidate `database/migrations/0003_tenant_foundation.sql` runs only in owned isolated fixtures; startup never applies it. It seeds no records, and repeat application fails safely. Membership lookup grants no client or engagement access.
 - P07C's candidate `database/migrations/0004_engagement_foundation.sql` is isolated-fixture only; startup never applies it. Team eligibility grants no client access or action permission.

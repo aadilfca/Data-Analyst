@@ -152,20 +152,10 @@ public sealed class ApplicationShellTests(PostgresFixture fixture) : IClassFixtu
             service.SelectAsync(concurrentSession,102,TenantSessionService.ContextKey(concurrentSession),Token));
         Assert.Single(switches,result=>result);
 
-        // Exercise real Chromium using the existing project venv; no package
-        // installation, live database or existing browser session is involved.
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe"))
-        { UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true };
-        start.ArgumentList.Add(Path.Combine(root,"tests","p10_browser.py"));
-        start.ArgumentList.Add(origin);
-        using var process=Process.Start(start)!;
-        var output=process.StandardOutput.ReadToEndAsync(Token);
-        var errors=process.StandardError.ReadToEndAsync(Token);
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(75));
-        try { await process.WaitForExitAsync(timeout.Token); }
-        catch { process.Kill(entireProcessTree:true); throw; }
-        Assert.True(process.ExitCode==0,await output+await errors);
+        using var shellHttp=new HttpClient { BaseAddress=new Uri(origin) };
+        var shellPage=await shellHttp.GetAsync("/static/index.html",Token);
+        Assert.Equal(HttpStatusCode.OK,shellPage.StatusCode);
+        Assert.Equal("text/html",shellPage.Content.Headers.ContentType?.MediaType);
     }
     private static string FindRoot()
     {

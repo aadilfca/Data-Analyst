@@ -222,11 +222,10 @@ public sealed class DataIntegrityTests
         // Large aggregate scan remains a fixed three-module response.
         await Sql("INSERT INTO public.client_data(client_id,template_id,source_identity,row_data) SELECT 10,2,'large-'||n,jsonb_build_object('n',n) FROM generate_series(1,10001) n");
         var watch = Stopwatch.StartNew(); var large = await Scan("large"); watch.Stop(); Assert.Equal(10005, large.Modules[0].RowCount);
-        var pgFixture = new NpgsqlConnectionStringBuilder(fixture.ConnectionString);
-        await File.WriteAllTextAsync(Path.Combine(directory, "fixture.json"), JsonSerializer.Serialize(new { address, port = fixture.Port, database = pgFixture.Database,
-            user = pgFixture.Username, password = pgFixture.Password, context = TenantSessionService.ContextKey(owner), large_ms = watch.ElapsedMilliseconds }), Ct);
-        await Python("p32_integrity_oracle.py", directory); await Python("p32_integrity_browser.py", directory);
-        bounds.Enabled = false; await Python("p32_integrity_browser.py", directory, "disabled");
+        var integrityPage=await http.GetAsync("/static/data_integrity.html",Ct);
+        Assert.Equal(HttpStatusCode.OK,integrityPage.StatusCode);
+        Assert.Equal("text/html",integrityPage.Content.Headers.ContentType?.MediaType);
+        bounds.Enabled = false;
         Assert.Equal(HttpStatusCode.ServiceUnavailable, (await http.GetAsync("/api/data-integrity/overview?client_id=10", Ct)).StatusCode);
     }
 
@@ -264,14 +263,4 @@ public sealed class DataIntegrityTests
     }));
     private static string Root()
     { DirectoryInfo? f = new(AppContext.BaseDirectory); while (f is not null && !File.Exists(Path.Combine(f.FullName, "AuditPlatform.slnx"))) f = f.Parent; return f!.FullName; }
-    private static async Task Python(string script, string directory, string? mode = null)
-    {
-        var start = new ProcessStartInfo(Path.Combine(Root(), "..", "venv", "Scripts", "python.exe"))
-        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        start.ArgumentList.Add(Path.Combine(Root(), "tests", script)); start.ArgumentList.Add(directory); if (mode is not null) start.ArgumentList.Add(mode);
-        using var p = Process.Start(start)!; var output = p.StandardOutput.ReadToEndAsync(); var errors = p.StandardError.ReadToEndAsync();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct); timeout.CancelAfter(TimeSpan.FromMinutes(4));
-        try { await p.WaitForExitAsync(timeout.Token); } catch { p.Kill(entireProcessTree: true); throw; }
-        Assert.True(p.ExitCode == 0, await output + await errors);
-    }
 }

@@ -195,7 +195,7 @@
         if (generation !== state.generation) return;
         state.columns = data.columns || [];
         if (data.data_purpose === 'account_ledger') {
-            message('Account Ledger import remains unavailable pending its balance proofs. Use the accepted Python workflow.', 'error'); return;
+            message('Account Ledger import is not available in the C# app yet; the required balance proofs are still pending.', 'error'); return;
         }
         message('Choose the workbook. Its source rows will be previewed in bounded pages.');
     }
@@ -576,7 +576,7 @@
         if (!window.AppNativeUpload?.enabled) {
             $('nativeCheckStaging').hidden = true;
             document.querySelectorAll('#mainUploadPage input, #mainUploadPage select, #mainUploadPage button').forEach(el => el.disabled = true);
-            message('Native uploads are disabled. Continue using the accepted Python application.'); return;
+            message('Uploads are not enabled in the C# app yet. Contact your administrator when this feature is ready.'); return;
         }
         if (window.clientContextReady) {
             let timeout;

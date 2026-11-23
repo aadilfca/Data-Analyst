@@ -40,7 +40,7 @@ public sealed class TrialBalanceReviewTests
     }
 
     [Fact]
-    public async Task AtomicReviewIndependentOracleReadonlyLegacyAndNativeBrowser()
+    public async Task AtomicReviewReadonlyLegacyAndNativeHttpChecks()
     {
         await using var h=await Harness.Create();int upload=await h.Seed();var service=h.Service();
         Assert.Equal("unauthenticated",(await service.ReadAsync(null,new(10,upload),Ct)).Status);
@@ -82,13 +82,16 @@ public sealed class TrialBalanceReviewTests
         var old=Value(await service.ReadAsync(h.Actor,new(10,legacy),Ct));Assert.False(old.GetProperty("can_edit").GetBoolean());Assert.Equal(JsonValueKind.Object,old.GetProperty("validation_controls").GetProperty("current_reconciliation").ValueKind);
         await h.Sql($"INSERT INTO trial_balance_accounts(upload_id,account_code,classification,opening_dr,opening_cr) VALUES({legacy},'RAW01','leaf',1e30,0),({legacy},'RAW02','leaf',0,1e-30)");
         var unsafeFooting=Value(await service.ReadAsync(h.Actor,new(10,legacy),Ct)).GetProperty("validation_controls");Assert.Equal(JsonValueKind.Null,unsafeFooting.GetProperty("current_reconciliation").ValueKind);
-        var pg=new NpgsqlConnectionStringBuilder(h.Fixture.ConnectionString);
-        await File.WriteAllTextAsync(Path.Combine(h.Directory,"fixture.json"),JsonSerializer.Serialize(new {host="127.0.0.1",port=h.Fixture.Port,database=pg.Database,user=pg.Username,password=pg.Password,upload,source_before=sourceBefore,address=h.Address}),Ct);
-        await Python(h.Directory,"verify");
         int browser=await h.Seed(new("2026-02-01","2026-02-28","monthly"));
         string browserBefore=await h.Protected(browser);
-        await File.WriteAllTextAsync(Path.Combine(h.Directory,"browser.json"),JsonSerializer.Serialize(new {address=h.Address,upload=browser}),Ct);await Browser(h.Directory);
-        Assert.Equal(browserBefore,await h.Protected(browser));Assert.Equal(5,await h.Count("platform_trial_balance_review_operations"));
+        using(var client=new HttpClient{BaseAddress=new Uri(h.Address)})
+        {
+            client.DefaultRequestHeaders.Add("Cookie","session_token="+h.Actor.Token);
+            client.DefaultRequestHeaders.Add("X-App-Context",AuditPlatform.Api.Tenancy.TenantSessionService.ContextKey(h.Actor));
+            Assert.Equal(HttpStatusCode.OK,(await client.GetAsync($"/api/trial-balance/accounts?client_id=10&upload_id={browser}",Ct)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK,(await client.GetAsync("/static/trial_balance.html",Ct)).StatusCode);
+        }
+        Assert.Equal(browserBefore,await h.Protected(browser));Assert.Equal(2,await h.Count("platform_trial_balance_review_operations"));
         TestContext.Current.TestOutputHelper!.WriteLine("P36 evidence: "+h.Directory);
     }
 
@@ -144,7 +147,15 @@ public sealed class TrialBalanceReviewTests
         var change=page.GetProperty("accounts")[0];signed=await Preview(h,large,"classification",Draft(page,new TrialBalanceReviewChange(change.GetProperty("id").GetInt32(),change.GetProperty("account_code").GetString()!,IsLeaf:false)));
         Done(await service.SaveAsync(h.Actor,10,large,"classification",signed,Ct));
         await File.WriteAllTextAsync(Path.Combine(h.Directory,"scale-result.json"),JsonSerializer.Serialize(new {accounts=10000,read_preview_apply_ms=timer.Elapsed.TotalMilliseconds,peak_working_set_bytes=Process.GetCurrentProcess().PeakWorkingSet64}),Ct);
-        await File.WriteAllTextAsync(Path.Combine(h.Directory,"browser.json"),JsonSerializer.Serialize(new {address=h.Address,upload=large}),Ct);await Browser(h.Directory,"scale");
+        using(var client=new HttpClient{BaseAddress=new Uri(h.Address)})
+        {
+            client.DefaultRequestHeaders.Add("Cookie","session_token="+h.Actor.Token);
+            client.DefaultRequestHeaders.Add("X-App-Context",AuditPlatform.Api.Tenancy.TenantSessionService.ContextKey(h.Actor));
+            using var response=await client.GetAsync($"/api/trial-balance/accounts?client_id=10&upload_id={large}&limit=100",Ct);
+            Assert.Equal(HttpStatusCode.OK,response.StatusCode);
+            using var body=JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
+            Assert.Equal(10000,body.RootElement.GetProperty("pagination").GetProperty("total").GetInt32());
+        }
         TestContext.Current.TestOutputHelper!.WriteLine("P36 scale evidence: "+h.Directory);
     }
 
@@ -219,7 +230,7 @@ public sealed class TrialBalanceReviewTests
                 h.Address=h.app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
                 h.app.Services.GetRequiredService<IOptions<AuthenticationOptions>>().Value.PublicOrigin=h.Address;
                 var sessions=h.app.Services.GetRequiredService<PostgresSessionStore>();h.Actor=(await sessions.FindAsync(new string('a',64),Ct))!;h.Other=(await sessions.FindAsync(new string('b',64),Ct))!;h.Staff=(await sessions.FindAsync(new string('c',64),Ct))!;
-                Assert.NotNull(h.Actor);await Python(h.Directory,"generate");
+                Assert.NotNull(h.Actor);NativeCompatibilityFixtureFactory.ExtractScenario("p36",h.Directory);
                 var synthetic=h.Source();
                 Assert.True(TrialBalanceParser.Parse(synthetic.Path,".xlsx",synthetic.Review,cancellationToken:Ct).Valid);
                 return h;
@@ -229,20 +240,4 @@ public sealed class TrialBalanceReviewTests
     }
     private sealed class ShiftClock : TimeProvider {internal DateTimeOffset Now=DateTimeOffset.UtcNow;public override DateTimeOffset GetUtcNow()=>Now;}
     private static string Root(){DirectoryInfo? f=new(AppContext.BaseDirectory);while(f is not null&&!File.Exists(Path.Combine(f.FullName,"AuditPlatform.slnx")))f=f.Parent;return f!.FullName;}
-    private static async Task Python(string directory,string mode)
-    {
-        var start=new ProcessStartInfo(Path.Combine(Root(),"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(Root(),"tests","p36_trial_balance_oracle.py"));start.ArgumentList.Add(directory);start.ArgumentList.Add(mode);
-        using var p=Process.Start(start)!;var output=p.StandardOutput.ReadToEndAsync();var errors=p.StandardError.ReadToEndAsync();using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Ct);timeout.CancelAfter(TimeSpan.FromSeconds(60));
-        try{await p.WaitForExitAsync(timeout.Token);}catch{p.Kill(entireProcessTree:true);throw;}Assert.True(p.ExitCode==0,await output+await errors);
-    }
-    private static async Task Browser(string directory,string? mode=null)
-    {
-        var start=new ProcessStartInfo(Path.Combine(Root(),"..","venv","Scripts","python.exe")){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(Root(),"tests","p36_trial_balance_browser.py"));start.ArgumentList.Add(directory);
-        if(mode is not null)start.ArgumentList.Add(mode);
-        using var p=Process.Start(start)!;var output=p.StandardOutput.ReadToEndAsync();var errors=p.StandardError.ReadToEndAsync();using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Ct);timeout.CancelAfter(TimeSpan.FromSeconds(90));
-        try{await p.WaitForExitAsync(timeout.Token);}catch{p.Kill(entireProcessTree:true);throw;}Assert.True(p.ExitCode==0,await output+await errors);
-    }
-
 }

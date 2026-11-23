@@ -10528,3 +10528,19 @@ Added a standalone Npgsql probe and Python runner for Phase 7B. Both fetch the s
 The first live attempt found that Python's ignored `.env` password was rejected and that the prior scope (client 5/template 1, Jan–Jun 2026) has no active uploads. With Aadil's approval, an aggregate-only scan found just two active rows for client 1/template 1 in November 2026. Three alternating rounds returned matching row counts, byte counts and hashes. Median fetch time was 0.078 seconds for Python and 0.170 seconds for C#; this two-row timing is a harness smoke check, not a speed conclusion. The 2,487-byte timing/hash evidence is in a temporary file outside the repository. Rows were held in memory only; no `.env`, protected secret or database content was changed.
 
 On 2026-11-23, Aadil deferred the representative speed comparison until C# app work is complete. Revised order: 6B test-harness independence → 7C C# independence audit → 8 section review → 7B Aadil's speed comparison → 6A Python retirement after acceptance. Keep Python intact until he accepts the final comparison.
+
+## C# Phase 6B test-harness independence — 2026-11-23
+
+Replaced Python-generated test setup with packaged synthetic fixtures and a C# extraction helper. Removed Python oracle/browser launches from C# tests; page acceptance uses C# HTTP checks. Removed 31 obsolete Python-only oracle/browser scripts from `tests/`. With Python-related PATH entries removed, the Release test project built with zero warnings/errors and the full serial suite completed: 319/322 passed. Per Aadil, the three upload-behavior failures are deferred for correction after this plan: one receipt workbook row-count mismatch (expected 7, found 5) and two imports stopped by the existing `import_derived_fields_review_required` gate. The 25 focused fixture checks also passed. No production database was contacted. Phase 6B's Python-independent test-harness objective is complete.
+
+## C# independence plan correction — 2026-11-23
+
+Aadil clarified that the deliverable is a standalone C# app, not a Python-backed migration. Removed Python-versus-C# speed comparison and legacy Python-app deletion from required C# phases. The separate Python app remains outside `dotnet-uploader`; C# acceptance is a clean build and launch without Python support. Revised order: 4 → 5 → 7A → 6B → 7C → 8. User-run C# speed checks may happen after completion but are not a Python comparison gate.
+
+## C# Phase 7C independence audit — 2026-11-23
+
+With Python-related `PATH` entries removed, the full Release solution built using the repository-local SDK with zero warnings/errors. Static scans found no Python executable/path dependency in C# source, tools or test code and no C# frontend prompts directing users to the Python app. The Dockerfile copies only the API source and `frontend`; the historical Python oracle scripts are not copied or invoked by C# tests. A local API process returned 200 for `/healthz` and the packaged public login page, then shut down cleanly. PostgreSQL stayed disabled and no user/database data was read. The first shell probe used incomplete temporary flags and hit expected startup validation; the corrected probe supplied the required shell/auth/user/client flags. No production configuration was edited. Phase 8 section review is next; Phase 6B broader acceptance issues and Aadil's local review remain open, so no commit is authorized.
+
+## C# Phase 8 Dashboard review — 2026-11-23
+
+Read-only review of `frontend/index.html` and `script.js` found active cards route to packaged C# pages; dashboard stats use `/api/dashboard/*` and Data Integrity uses `/api/data-integrity/overview`. Analysis and Audit Log are intentionally Coming Soon. Aadil's screenshot showed the shared `Retrying...` toast, which indicates a dashboard GET was retried; observe whether it persists. No Dashboard source was changed. The broader worktree still contains unaccepted Phase 6B changes, so no commit was made.

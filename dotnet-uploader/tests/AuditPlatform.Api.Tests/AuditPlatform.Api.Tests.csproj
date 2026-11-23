@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="../fixtures/workbook-reader-cases.json" Link="Fixtures/workbook-reader-cases.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures/native-compatibility-fixtures.zip" CopyToOutputDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageReference Include="xunit.v3" Version="4.0.3" />

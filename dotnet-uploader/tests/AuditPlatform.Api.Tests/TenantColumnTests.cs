@@ -200,7 +200,7 @@ public sealed class TenantColumnTests(PostgresFixture fixture) : IClassFixture<P
                 services.PostConfigure<PostgresOptions>(o=>{o.Enabled=true;o.ConnectionString=fixture.ConnectionString;});
                 services.PostConfigure<AuthenticationOptions>(o=>{o.Enabled=true;o.PublicOrigin="http://127.0.0.1:5080";});
                 services.PostConfigure<ApplicationShellOptions>(o=>o.Enabled=true); services.PostConfigure<UserManagementOptions>(o=>o.Enabled=true);
-                services.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true); services.PostConfigure<ColumnManagementOptions>(o=>o.Enabled=true);
+                services.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true); services.PostConfigure<ColumnManagementOptions>(o=>{o.Enabled=true;o.WriteEnabled=true;});
             });
         });
         app.UseKestrel(server=>server.Listen(IPAddress.Loopback,0));
@@ -231,12 +231,9 @@ public sealed class TenantColumnTests(PostgresFixture fixture) : IClassFixture<P
         Assert.Equal(HttpStatusCode.UnprocessableEntity,(await http.PostAsJsonAsync("/api/columns",new {data_type="Text"},Token)).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/api/columns/categories",Token)).StatusCode);
         Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/api/columns/close-matches?name=Supplier",Token)).StatusCode);
-        var start=new ProcessStartInfo(Path.Combine(root,"..","venv","Scripts","python.exe")) {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root,"tests","p12_browser.py")); start.ArgumentList.Add(address);
-        using var process=Process.Start(start)!; var output=process.StandardOutput.ReadToEndAsync(Token); var errors=process.StandardError.ReadToEndAsync(Token);
-        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(Token); timeout.CancelAfter(TimeSpan.FromSeconds(100));
-        try { await process.WaitForExitAsync(timeout.Token); } catch { process.Kill(entireProcessTree:true); throw; }
-        Assert.True(process.ExitCode==0,await output+await errors);
+        var columnsPage=await http.GetAsync("/static/columns.html",Token);
+        Assert.Equal(HttpStatusCode.Found,columnsPage.StatusCode);
+        Assert.Equal("/static/client_select.html",columnsPage.Headers.Location?.OriginalString);
     }
     private static string FindRoot()
     {

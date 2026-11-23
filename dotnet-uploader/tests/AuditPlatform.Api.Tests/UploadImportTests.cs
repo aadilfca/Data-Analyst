@@ -28,20 +28,10 @@ public sealed class ImportGoldenFixture : IAsyncLifetime
 {
     public string DirectoryPath {get;private set;}="";
     public JsonDocument Oracle {get;private set;}=null!;
-    public async ValueTask InitializeAsync()
-    {
-        DirectoryInfo? root=new(AppContext.BaseDirectory);
-        while(root is not null&&!File.Exists(Path.Combine(root.FullName,"AuditPlatform.slnx"))) root=root.Parent;
-        if(root is null) throw new InvalidOperationException("Solution not found");
-        DirectoryPath=Path.Combine(root.FullName,".tools","p25-tests-"+Guid.NewGuid().ToString("N"));
-        var start=new ProcessStartInfo(Path.Combine(root.FullName,"..","venv","Scripts","python.exe"))
-            {UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
-        start.ArgumentList.Add(Path.Combine(root.FullName,"tests","p25_import_oracle.py"));start.ArgumentList.Add(DirectoryPath);
-        using var process=Process.Start(start)!;var output=process.StandardOutput.ReadToEndAsync();var errors=process.StandardError.ReadToEndAsync();
-        using var deadline=new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        try {await process.WaitForExitAsync(deadline.Token);} catch {process.Kill(entireProcessTree:true);throw;}
-        Assert.True(process.ExitCode==0,await output+await errors);
-        Oracle=JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(DirectoryPath,"oracle.json")));
+    public ValueTask InitializeAsync() {
+        DirectoryPath = NativeCompatibilityFixtureFactory.CreateWorkspace("p25", "p25-tests");
+        Oracle = NativeCompatibilityFixtureFactory.ReadOracle(DirectoryPath);
+        return ValueTask.CompletedTask;
     }
     public ValueTask DisposeAsync() {Oracle?.Dispose();return ValueTask.CompletedTask;}
 }
@@ -142,7 +132,9 @@ public sealed class UploadImportTests(ImportGoldenFixture golden) : IClassFixtur
         {
             var source=new PreparationRequest(10,1,sheet,RequestId:Guid.NewGuid(),Mappings:manual?
                 [new(1,1),new(2,2),new(3,3),new(4,4),new(5,5),new(6,all?6:null)]:null);
-            var prepared=(await preparation.PrepareAsync(owner,id,source,Token)).Output!;
+            var result=await preparation.PrepareAsync(owner,id,source,Token);
+            Assert.True(result.Status=="success",result.Code);
+            var prepared=result.Output!;
             source=source with {Sha256=prepared.Context.Sha256,ConfigurationKey=prepared.Context.ConfigurationKey,MappingRevision=prepared.Context.MappingRevision};
             return Request(sheet) with {Coverage=Request(sheet).Coverage with {Footing=new(new(source,"replace_range",5),true)}};
         }
@@ -324,6 +316,11 @@ public sealed class UploadImportTests(ImportGoldenFixture golden) : IClassFixtur
         // The ordinary upload path must still work while absent optional guards
         // are skipped, and must not create those tables as a side effect.
         await Reset();
+        using(var replacement=File.OpenRead(Path.Combine(golden.DirectoryPath,"plans.xlsx")))
+        {
+            var staged=await staging.ReceiveAsync(owner,10,1,Guid.NewGuid(),"synthetic.xlsx",replacement,Token);
+            Assert.Equal("success",staged.Status);id=staged.FileId!.Value;
+        }
         var withoutOptionalEvidence=await Plan("Changed");
         await Sql("DROP TABLE public.cashflow_prepared_lines, public.voucher_line_physical_bill_items, public.voucher_line_documents, public.verification_details");
         var optionalEvidenceResult=await Import(withoutOptionalEvidence);
