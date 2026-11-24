@@ -85,7 +85,7 @@ public sealed class DataBankTests
             SELECT setval(pg_get_serial_sequence('public.client_data','id'),1000);
             INSERT INTO public.client_data(client_id,template_id,row_data,extract_date,is_deleted,change_detection_status) VALUES(10,1,'{"col_1":"Deleted","col_3":999}','2026-04-03',FALSE,'deleted'),(10,1,'{"col_1":"Soft","col_3":999}','2026-04-03',TRUE,'unchanged');
             INSERT INTO public.client_data(client_id,template_id,row_data,extract_date,extract_amount,source_order_upload_id,source_row_number)
-                SELECT 10,5,jsonb_build_object('col_1','V'||n,'col_3',0.01),'2026-04-03'::date,0.01,100,n FROM generate_series(1,10000) n;
+                SELECT 10,5,jsonb_build_object('col_1','Repeated','col_3',0.01),'2026-04-03'::date,0.01,100,n FROM generate_series(1,10000) n;
             INSERT INTO public.client_data_history VALUES(1,10,'{"prior":"preserved"}');
             """);
         await using var app = Host(fixture); app.UseKestrel(server => server.Listen(IPAddress.Loopback, 0));
@@ -126,6 +126,10 @@ public sealed class DataBankTests
         var availability=await Read(new("availability",10,Start:"2026-04-01",End:"2026-04-30"));
         Assert.Equal(5,availability.GetArrayLength()); Assert.DoesNotContain("Foreign",availability.GetRawText());
         var metric=await Read(new("metrics",10)); Assert.Equal(5,metric.GetProperty("templates").GetArrayLength());
+        var documentCounts=metric.GetProperty("templates").EnumerateArray()
+            .ToDictionary(row=>row.GetProperty("template_id").GetInt32(),row=>row.GetProperty("document_count").GetInt64());
+        Assert.Equal(3L,documentCounts[1]); Assert.Equal(2L,documentCounts[2]); Assert.Equal(0L,documentCounts[3]);
+        Assert.Equal(1L,documentCounts[4]); Assert.Equal(1L,documentCounts[5]);
         foreach (var bad in new[] {Query() with {Page=int.MaxValue},Query() with {Limit=201},Query() with {Minimum=double.NaN},Query() with {Start="bad"},Query() with {Search=new string('x',513)}})
             Assert.Equal("invalid",(await service.ReadAsync(actor,bad,Ct)).Status);
         Assert.Equal("not_found",(await service.ReadAsync(actor,Query(6),Ct)).Status);

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## C# Data Bank metrics batching — 2026-11-24
+
+Metrics reads now share the bounded template/column metadata query and count mapped document IDs for all templates in one parameterized SQL read instead of one round trip per template. Templates without a document role retain the row-count fallback; trimmed distinct values, tenant/client scope, authorization recheck, response limits, and output shape are preserved. No controller, frontend, schema, or Supabase data changed.
+
+Verification: isolated Release test-project build passed with zero warnings/errors; focused DataBankTests passed 2/2 using disposable local PostgreSQL. A non-executing Supabase `EXPLAIN` selected the existing active-identity index; no runtime query timing was gathered. The fresh HAR had 13/13 API calls return 200; metrics took 1.57 s versus 1.63–1.82 s in the prior two requests, while availability and overdue remained near their prior range. This single capture is not a controlled comparison, and HAR cannot prove SQL round-trip counts. No database writes occurred; local displayed-count acceptance remains pending.
+
 ## C# Data Bank read round trips — 2026-11-24
 
 Availability and overdue reads now load bounded template/column metadata in one SQL statement instead of two. Overdue calculations use exact-date and yearly-holiday hash sets, avoiding repeated scans of the holiday list. Authorization rechecks, tenant filters, size limits, response shape, freshness, and other operations retain their existing paths; no controller, frontend, schema, or Supabase data changed.

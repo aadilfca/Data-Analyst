@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ + dotnet-uploader/tools/AuditPlatform.FetchBenchmark/ → Gated C# APIs/jobs, bounded Data Bank reads, independent frontend, standalone Npgsql benchmark, acceptance tests and restricted Supabase access. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ + dotnet-uploader/tools/AuditPlatform.FetchBenchmark/ → Gated C# APIs/jobs, bounded Data Bank reads with batched metrics, independent frontend, standalone Npgsql benchmark, acceptance tests and restricted Supabase access. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-24: Data Bank metrics batch document counts and share bounded metadata reads. See CHANGELOG_ARCHIVE.md.
 - 2026-11-24: Data Bank availability and overdue reads consolidate metadata queries and use hash-set holiday lookups. See CHANGELOG_ARCHIVE.md.
 - 2026-11-24: Consolidated scoped session/client reads and added Development-only password timing. See C# scoped request consolidation.
 - 2026-11-23: Phase 8 static frontend review covered packaged pages/assets; authenticated browser acceptance awaits port 5080. See C# Phase 8 frontend review.

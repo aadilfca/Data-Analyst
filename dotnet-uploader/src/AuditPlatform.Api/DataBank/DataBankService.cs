@@ -36,7 +36,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             var value = await snapshots.ExecuteAsync(async (db, token) =>
             {
                 await Authorize(db, session, query.ClientId, token);
-                var combineMetadata = query.Operation is "availability" or "overdue";
+                var combineMetadata = query.Operation is "availability" or "overdue" or "metrics";
                 var templates = await Templates(db, session.TenantId!.Value, query.TemplateId, token, combineMetadata);
                 if (query.TemplateId is {} id && templates.All(t => t.Id != id)) Reject("not_found", "template_not_found");
                 return query.Operation switch
@@ -122,7 +122,7 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         long definitionBytes = 0;
         if (combineMetadata)
         {
-            // Availability and overdue reads share this bounded metadata load,
+            // Availability, overdue, and metrics reads share this bounded metadata load,
             // avoiding a database round trip between template and column lookup.
             var maximumColumnRows = checked(options.Value.MaximumTemplates * options.Value.MaximumColumns + 1);
             var maximumColumns = maximumColumnRows - 1;
@@ -247,22 +247,41 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
         command.Parameters.AddWithValue(client); var result = new Dictionary<int, string>();
         await using var reader = await command.ExecuteReaderAsync(ct); while (await reader.ReadAsync(ct)) result[reader.GetInt32(0)] = reader.GetString(1); return result;
     }
-    private static async Task<long> Documents(PostgresTransactionContext db, int client, DataBankTemplate t, long rows, CancellationToken ct)
+    private static async Task<Dictionary<int, long>> DocumentCounts(PostgresTransactionContext db, int client,
+        IReadOnlyList<DataBankTemplate> templates, Dictionary<int, Inventory> inventory, CancellationToken ct)
     {
-        if (t.Document is null) return rows;
-        await using var command = db.CreateCommand($"SELECT count(DISTINCT NULLIF(BTRIM(cd.row_data->>$3),'')) FROM public.client_data cd WHERE cd.client_id=$1 AND cd.template_id=$2 AND {Active}");
-        command.Parameters.AddWithValue(client); command.Parameters.AddWithValue(t.Id); command.Parameters.AddWithValue(t.Document.StorageKey);
-        return (long)(await command.ExecuteScalarAsync(ct))!;
+        var counts = templates.ToDictionary(t => t.Id,
+            t => t.Document is null ? inventory.GetValueOrDefault(t.Id)?.Rows ?? 0 : 0);
+        var mapped = templates.Where(t => t.Document is not null).ToArray();
+        if (mapped.Length == 0) return counts;
+
+        // Count every template's mapped document key in one round trip. Keep
+        // templates without a document role on the established row-count fallback.
+        await using var command = db.CreateCommand($"""
+            SELECT configured.template_id,
+                   count(DISTINCT NULLIF(BTRIM(cd.row_data->>configured.storage_key),''))
+            FROM unnest($2::integer[], $3::text[]) AS configured(template_id,storage_key)
+            LEFT JOIN public.client_data cd
+              ON cd.client_id=$1 AND cd.template_id=configured.template_id AND {Active}
+            GROUP BY configured.template_id
+            """);
+        command.Parameters.AddWithValue(client);
+        command.Parameters.AddWithValue(mapped.Select(t => t.Id).ToArray());
+        command.Parameters.AddWithValue(mapped.Select(t => t.Document!.StorageKey).ToArray());
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) counts[reader.GetInt32(0)] = reader.GetInt64(1);
+        return counts;
     }
     private static async Task<object> Availability(PostgresTransactionContext db, DataBankQuery q, List<DataBankTemplate> templates, CancellationToken ct)
     {
         var inventory = await InventoryRows(db, q, ct); var frequency = await Frequencies(db, q.ClientId, ct); var result = new List<object>();
+        Dictionary<int, long>? documents = q.Metrics ? await DocumentCounts(db, q.ClientId, templates, inventory, ct) : null;
         foreach (var t in templates.Where(t => q.TemplateId is null || t.Id == q.TemplateId))
         {
             var row = inventory.GetValueOrDefault(t.Id) ?? new Inventory(0, 0, 0, null, null, 0);
-            long? documents = q.Metrics ? await Documents(db, q.ClientId, t, row.Rows, ct) : null;
+            long? documentCount = q.Metrics ? documents!.GetValueOrDefault(t.Id) : null;
             result.Add(new { template_id = t.Id, template_name = t.Name, filtered_row_count = row.Filtered, total_row_count = row.Rows,
-                document_count = documents, date_min = row.First, date_max = row.Last, filtered_sunday_count = row.Sundays,
+                document_count = documentCount, date_min = row.First, date_max = row.Last, filtered_sunday_count = row.Sundays,
                 status = row.Rows > 0 ? "complete" : "missing", filtered_status = row.Filtered > 0 ? "complete" : "missing",
                 estimated_size_bytes = q.Metrics ? (long?)row.Bytes : null, estimated_size_formatted = q.Metrics ? Size(row.Bytes) : null,
                 upload_frequency = frequency.GetValueOrDefault(t.Id, "Daily") });
@@ -272,10 +291,11 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
     private static async Task<object> Metrics(PostgresTransactionContext db, DataBankQuery q, List<DataBankTemplate> templates, CancellationToken ct)
     {
         var inventory = await InventoryRows(db, q, ct); var result = new List<object>(); long bytes = inventory.Values.Sum(row => row.Bytes);
+        var documents = await DocumentCounts(db, q.ClientId, templates, inventory, ct);
         foreach (var t in templates)
         {
             var row = inventory.GetValueOrDefault(t.Id) ?? new Inventory(0, 0, 0, null, null, 0);
-            result.Add(new { template_id = t.Id, document_count = await Documents(db, q.ClientId, t, row.Rows, ct), estimated_size_bytes = row.Bytes, estimated_size_formatted = Size(row.Bytes) });
+            result.Add(new { template_id = t.Id, document_count = documents.GetValueOrDefault(t.Id), estimated_size_bytes = row.Bytes, estimated_size_formatted = Size(row.Bytes) });
         }
         return new { client_id = q.ClientId, templates = result, client_size_bytes = bytes, client_size_formatted = Size(bytes) };
     }
