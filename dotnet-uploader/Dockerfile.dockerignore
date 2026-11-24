@@ -1,10 +1,9 @@
 **
-!dotnet-uploader/
-!dotnet-uploader/global.json
-!dotnet-uploader/src/
-!dotnet-uploader/src/AuditPlatform.Api/
-!dotnet-uploader/src/AuditPlatform.Api/**
-!dotnet-uploader/frontend/
-!dotnet-uploader/frontend/**
+!global.json
+!src/
+!src/AuditPlatform.Api/
+!src/AuditPlatform.Api/**
+!frontend/
+!frontend/**
 **/bin
 **/obj

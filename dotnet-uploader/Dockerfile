@@ -1,11 +1,11 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /workspace
 
-COPY dotnet-uploader/global.json dotnet-uploader/global.json
-COPY dotnet-uploader/src/AuditPlatform.Api/ dotnet-uploader/src/AuditPlatform.Api/
-COPY dotnet-uploader/frontend/ dotnet-uploader/frontend/
+COPY global.json ./
+COPY src/AuditPlatform.Api/ src/AuditPlatform.Api/
+COPY frontend/ frontend/
 
-WORKDIR /workspace/dotnet-uploader
+WORKDIR /workspace
 RUN dotnet restore src/AuditPlatform.Api/AuditPlatform.Api.csproj -p:NuGetAudit=false
 RUN dotnet publish src/AuditPlatform.Api/AuditPlatform.Api.csproj \
     --configuration Release --no-restore --output /app/publish
