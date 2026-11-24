@@ -4,7 +4,7 @@ using AuditPlatform.Api.Workbooks;
 
 namespace AuditPlatform.Api.Uploads;
 
-// Mirrors the existing explicit Python date choice. It never guesses component
+// Uses explicit date choices; it never guesses component
 // order, rounds an amount, or changes a native Excel calendar date's timezone.
 public static class UploadDateParser
 {
@@ -18,11 +18,11 @@ public static class UploadDateParser
         if(cell.Kind==WorkbookCellKind.DateTime) return cell.DateTime;
         if(cell.Kind is WorkbookCellKind.Number or WorkbookCellKind.Boolean)
         {
-            // Bare serials retain the Python import origin, including in a 1904
+            // Bare serials retain the workbook import origin, including in a 1904
             // workbook; date-formatted native cells were decoded by P17 already.
             double serial;
-            // Python classifies bool as an int. Preserve that legacy preview
-            // interpretation here; eligibility checks belong to P19.
+            // Boolean date inputs retain the defined 0/1 behavior; eligibility checks belong to P19.
+
             if(cell.Kind==WorkbookCellKind.Boolean) serial=cell.Boolean==true?1:0;
             else if(!double.TryParse(cell.NumberToken,CultureInfo.InvariantCulture,out serial) || !double.IsFinite(serial)) throw new FormatException("Invalid Excel date serial.");
             try {return new DateTime(1899,12,30).AddDays(serial);} catch(ArgumentOutOfRangeException) {throw new FormatException("Excel date serial is out of range.");}

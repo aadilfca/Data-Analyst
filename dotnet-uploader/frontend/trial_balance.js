@@ -21,7 +21,7 @@ let availableUploadsRequestToken = 0;
 // Which saved upload is currently active for the Available Trial Balances view.
 let currentUploadId = null;
 // Native saved review is explicit, including its disabled state. No native
-// upload/setup request falls through to the Python protocol.
+// upload or setup requests.
 const tbNative = {present: Object.hasOwn(window, 'AppNativeTrialBalance'), page:1, search:'', data:null, pending:null};
 // Draft account codes never alter the saved hierarchy or assignments until one save succeeds.
 const tbPendingCodeCorrections = new Map();
@@ -1656,7 +1656,7 @@ if (saveTrialBalanceMappingBtn) {
 }
 
 // ---------- IMPORT PROGRESS BAR (Fast Trial Balance upload) ----------
-// Polls GET /api/trial-balance/upload-status/{progress_key} (routers/trial_balance.py) while
+// Polls GET /api/trial-balance/upload-status/{progress_key} (Trial Balance API) while
 // uploadTrialBalance()'s POST is in flight -- mirrors upload.js's own pollImportProgress()/
 // updateImportProgressBar(), tb-prefixed since this page has its own progressKey scheme
 // (TB upload is a single one-shot endpoint, so the key is generated client-side, not

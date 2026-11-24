@@ -66,7 +66,7 @@ public sealed class UploadInputValidationTests(InputValidationGoldenFixture gold
     }
 
     [Fact]
-    public void NumericSyntaxAndLedgerSignsMatchIndependentPythonWithoutNarrowingTokens()
+    public void NumericSyntaxAndLedgerSignsMatchIndependentReferenceRulesWithoutNarrowingTokens()
     {
         foreach(var vector in golden.Oracle.RootElement.GetProperty("numbers").EnumerateArray())
         {
@@ -84,7 +84,7 @@ public sealed class UploadInputValidationTests(InputValidationGoldenFixture gold
     }
 
     [Fact]
-    public void OriginalCellErrorsDatesAndCriticalBlanksMatchPython()
+    public void OriginalCellErrorsDatesAndCriticalBlanksMatchReferenceRules()
     {
         foreach(var item in golden.Oracle.RootElement.GetProperty("cases").EnumerateArray())
         {

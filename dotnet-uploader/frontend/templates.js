@@ -107,7 +107,7 @@ const quickAddCancelBtn = document.getElementById('quickAddCancelBtn');
 const quickAddSaveBtn = document.getElementById('quickAddSaveBtn');
 const quickAddSaveAndNewBtn = document.getElementById('quickAddSaveAndNewBtn');
 
-// Mirrors RATE_SOURCE_ELIGIBLE_TEMPLATES in routers/templates.py -- keep in sync.
+// Mirrors RATE_SOURCE_ELIGIBLE_TEMPLATES in Templates API -- keep in sync.
 const RATE_SOURCE_ELIGIBLE_TEMPLATES = new Set(['purchase order', 'store receiving', 'vendor bill']);
 
 function updateRateSourceVisibility() {

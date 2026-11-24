@@ -108,7 +108,7 @@ public static class UploadDerivedFieldService
         if(precision is not (0 or 2 or 4)) throw new IdentityReview("derived_rate_precision_review_required");
         var q=Fraction(Token(quantity));if(q.N.IsZero) return new("blank");var a=Fraction(Token(amount));var scale=BigInteger.Pow(10,precision);
         var exact=Round(a.N*q.D*scale,a.D*q.N);
-        // Compare exact arithmetic with Python's binary64 division/rounding.
+        // Compare exact arithmetic with floating-point division and rounding.
         // Disagreement requires review rather than changing accepted accounting.
         double legacy=double.Parse(Token(amount),CultureInfo.InvariantCulture)/double.Parse(Token(quantity),CultureInfo.InvariantCulture);
         var binary=Binary(legacy);if(exact!=Round(binary.N*scale,binary.D)) throw new IdentityReview("derived_rate_precision_review_required");

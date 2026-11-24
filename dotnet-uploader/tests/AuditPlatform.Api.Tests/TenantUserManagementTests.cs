@@ -176,7 +176,7 @@ public sealed class TenantUserManagementTests(PostgresFixture fixture) : IClassF
                 {
                     settings.Enabled = true; settings.PublicOrigin = "http://127.0.0.1:5080";
                 });
-                services.PostConfigure<UserManagementOptions>(settings => settings.Enabled = true);
+                services.PostConfigure<UserManagementOptions>(settings => { settings.Enabled = true; settings.WriteEnabled = true; });
             });
         }))
         using (var client = app.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = false }))

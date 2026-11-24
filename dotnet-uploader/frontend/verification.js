@@ -1224,7 +1224,7 @@ function findNearestInRangeVoucherId(targetDate) {
 // ---------- RECONCILE AN ACTIVE SESSION AGAINST A NEW DATE RANGE ----------
 // Session date-range reconciliation, Phase 2 of 4: calls Phase 1's backend reconcile endpoint.
 // Newly-in-range/reactivated/excluded lines are all handled server-side (see
-// reconcile_session_range() in routers/verification.py) - this is call-and-refresh only, no
+// reconcile_session_range() in Verification API) - this is call-and-refresh only, no
 // client-side range-status logic.
 // Confirmed fix (regressions found right after Phase 2 landed): this deliberately never switches
 // which view is visible - Apply only refreshes data and stays on Place 2.
@@ -1783,7 +1783,7 @@ async function activateSessionView(sessionId, targetVoucherId = null, rulebookPr
 // Restores the session view after a hard refresh from ?state=session&id=<sessionId> - re-fetches
 // this session fresh from the server rather than restoring any cached view. GET audited_cashbook
 // is used as the existence+data check since it already 404s cleanly on a missing/cancelled session
-// (see get_audited_cashbook() in routers/verification.py); on success it also carries the cashbook
+// (see get_audited_cashbook() in Verification API); on success it also carries the cashbook
 // name and full transaction list, so no extra request is needed to seed that state before handing
 // off to activateSessionView(). Falls back to the dashboard with a clear message on failure,
 // instead of leaving a broken session screen.
@@ -2179,7 +2179,7 @@ let auditGuidanceLoadingPromises = {};
 let categoryForAccountLoadingPromises = {};
 
 // The session Rulebook intentionally stores cross-check document references as stable IDs. The
-// legacy guidance endpoint already returns display names, so normalize the session shape here at
+// the guidance API already returns display names, so normalize the session shape here at
 // the Verification adapter boundary instead of changing either public response contract. Keep the
 // original IDs and all document metadata available for future consumers while supplying the
 // `documents` name list expected by buildAuditGuidanceTable().
@@ -2999,7 +2999,7 @@ function parseVoucherAmount(value) {
 }
 
 // Non-Treasury workstreams show debit-side costs/invoices as positive and credit-side
-// reversals/adjustments as negative. Treasury and legacy preview behavior remains unchanged.
+// reversals/adjustments as negative. Treasury and preview behavior remains unchanged.
 function getVerificationLineAmount(row) {
     const raw = getVoucherLineAmount(row);
     if (!isNonTreasuryVerification()) return raw;
@@ -3083,7 +3083,7 @@ function updateClearedStatusBadgeForLine(uid, clearedStatus) {
 }
 
 // ---------- "Why is this line Cleared/Query?" popover ----------
-// The engine (compute_and_persist_cleared_status(), routers/verification.py) ANDs five independent
+// The engine (compute_and_persist_cleared_status(), Verification API) ANDs five independent
 // gates into a bare Cleared/Query string; this popover asks the read-only
 // GET /api/verification/line_status_reason/{id} endpoint which gate actually failed and shows the
 // breakdown. Anchored to the whole .voucher-line-status-cell rather than the Cleared/Query badge,
@@ -5084,8 +5084,9 @@ function openSessionPopup() {
     } else if (isVendorVerification()) {
         loadCashbooks(undefined, undefined, persistedCashbook);
     } else {
-        const today = formatDateInput(new Date());
-        loadCashbooks(today, today, persistedCashbook);
+        // Resolve the latest date from the C# API so a client whose data is older than today
+        // opens on the month containing its latest assigned source data.
+        loadCashbooks(undefined, undefined, persistedCashbook);
     }
 }
 
@@ -5221,7 +5222,7 @@ popupDateRangePicker = mountPopupDateRangePicker();
 // the picked range into Place 1's picker so it stays in sync if that dialog is reopened.
 // Superseded (Session date-range reconciliation, Phase 2 of 4): the 2026-08-11 investigation
 // found a session's voucher list was a fixed snapshot with no way to change it short of starting
-// a new session - that's no longer true. Phase 1 (routers/verification.py) added
+// a new session - that's no longer true. Phase 1 (Verification API) added
 // POST /api/verification/session/{id}/reconcile_range, which re-resolves an active session's
 // voucher list against a new range without losing anything (soft-excludes what falls out,
 // reactivates what comes back, adds what's newly in range); this phase wires it up so clicking

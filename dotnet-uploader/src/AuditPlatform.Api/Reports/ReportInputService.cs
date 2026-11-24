@@ -133,7 +133,7 @@ public sealed class ReportInputService(PostgresReadSnapshot snapshots, IOptions<
                     if (categorySource == ReportAccountCategorySource.Cashflow)
                     {
                         // Vendor payment schedules use the same saved verification workstream
-                        // assignments as the Python report; never infer vendors from captions.
+                        // assignments used by the report; never infer vendors from captions.
                         assignments = await ReadStatementAssignmentsAsync(db, normalized.ClientId, budget, token);
                         cashflowAssignments = await ReadCashflowAssignmentsAsync(db, normalized.ClientId, budget, token);
                         cashflowRoleCategories = await ReadCashflowRoleCategoriesAsync(db, normalized.ClientId, budget, token);

@@ -64,7 +64,7 @@ public sealed class UploadIdentityTests(IdentityGoldenFixture golden) : IClassFi
     }
 
     [Fact]
-    public void CanonicalV2HashesMatchPythonBytesIncludingUnicodeBlankZeroAndOccurrences()
+    public void CanonicalV2HashesMatchReferenceBytesIncludingUnicodeBlankZeroAndOccurrences()
     {
         foreach(var vector in golden.Oracle.RootElement.GetProperty("identity").EnumerateArray())
         {

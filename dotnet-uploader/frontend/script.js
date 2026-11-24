@@ -52,7 +52,7 @@ async function loadKpiStats() {
 }
 
 // ---------- LOAD OVERDUE UPLOADS (Overdue Uploads, Phase D2, FINAL) ----------
-// All-clients list from routers/data.py's compute_overdue_uploads(), already
+// All-clients list from Data Bank API's compute_overdue_uploads(), already
 // sorted most-overdue-first by the backend — no client-side re-sort needed.
 // Row-click-to-jump-to-upload-page is deliberately deferred (not built this phase).
 let overdueUploadsData = [];

@@ -109,12 +109,12 @@ public sealed class UploadFootingService(UploadPreparationService preparation,IO
                 var cell=Cell(mapping);unknownFormula|=cell.FormulaState==WorkbookFormulaState.Unknown;
                 try
                 {
-                    // Preserve Python's inferred missing values in optional detail
+                    // Preserve inferred missing values in optional detail
                     // only. Source faults still block through P19 and this parser.
                     var value=UploadExactAmount.FromCell(!control&&UploadInputValidationService.Blank(cell)&&!UploadNumericParser.Check(cell).NonFinite
                         && cell.FormulaState!=WorkbookFormulaState.MissingResult?cell with {Kind=WorkbookCellKind.Blank}:cell,control);
                     if(!UploadInputValidationService.Blank(cell) && value.HasLegacyConversionRisk(cell))
-                    {precisionRisk=true;Issue(row.Number,mapping,"precision_review_required","Source precision may change through a legacy float-based reader. Review numeric compatibility.");}
+                    {precisionRisk=true;Issue(row.Number,mapping,"precision_review_required","Source precision may change through floating-point conversion. Review numeric precision.");}
                     if(control) reported[mapping.ColumnId]=value;
                     else {full[mapping.ColumnId]+=value;if(observed.Eligible) selected[mapping.ColumnId]+=value;}
                 }

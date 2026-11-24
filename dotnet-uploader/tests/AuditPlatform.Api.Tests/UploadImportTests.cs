@@ -45,7 +45,7 @@ public sealed class UploadImportTests(ImportGoldenFixture golden) : IClassFixtur
     private static IdentityRequest Request(string sheet="Base",string mode="replace_range")=>
         new(new(new(new(new(10,1,sheet,"rows",RequestId:Guid.NewGuid()),mode,5),true),"2026-04-01","2026-04-30",true));
     [Fact]
-    public void RawGuardsMatchExtractedPython()
+    public void RawGuardsMatchRecordedInputs()
     {
         foreach(var vector in golden.Oracle.RootElement.GetProperty("fingerprints").EnumerateArray())
             Assert.Equal(vector.GetProperty("hash").GetString(),UploadImportWriter.RawFingerprint(UploadIdentityValue.FromJson(vector.GetProperty("values").GetRawText())));
@@ -312,7 +312,7 @@ public sealed class UploadImportTests(ImportGoldenFixture golden) : IClassFixtur
         foreach(string path in Directory.GetFiles(directory,"*.bin")) File.Delete(path);
         clock.Current=clock.Current.AddHours(3);Assert.Equal("success",(await Import(lost)).Status);clock.Current=DateTimeOffset.UtcNow;
 
-        // A new C# database may not yet have legacy Verification/evidence tables.
+        // A new C# database may not yet have Verification/evidence tables.
         // The ordinary upload path must still work while absent optional guards
         // are skipped, and must not create those tables as a side effect.
         await Reset();

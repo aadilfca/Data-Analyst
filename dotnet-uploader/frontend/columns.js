@@ -32,7 +32,7 @@ let editingId = null;
 const columnActionsInFlight = new Set();
 
 // Native capability affects presentation only; every API operation rechecks
-// tenant/session permissions. Python retains its existing editable page.
+// tenant/session permissions. This frontend has its own editable page.
 function canEditTenantColumns() {
     return !window.AppTenantColumns?.enabled || window.AppTenantColumns.canEdit === true;
 }

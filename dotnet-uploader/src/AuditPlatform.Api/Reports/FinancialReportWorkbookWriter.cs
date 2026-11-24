@@ -18,6 +18,7 @@ internal sealed record CashflowWorkbookFilter(string Search = "", string Categor
 /// <summary>Bounded OOXML export using literal text cells and no spreadsheet formulas.</summary>
 internal static class FinancialReportWorkbookWriter
 {
+    private const int ExcelTextCellCharacterLimit = 32767;
     private const string MainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
     private const string RelNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
     private const string PackageNs = "http://schemas.openxmlformats.org/package/2006/relationships";
@@ -32,6 +33,8 @@ internal static class FinancialReportWorkbookWriter
             || sheets.Any(sheet => !ValidSheetName(sheet.Name)
                 || sheet.Rows.Any(row => row.Count > 16384)))
             throw new InvalidDataException("Financial report workbook has an invalid sheet layout.");
+        if (sheets.Any(sheet => sheet.Rows.Any(row => row.Any(CellTextExceedsExcelLimit))))
+            throw new InvalidDataException("Financial report workbook contains cell text exceeding Excel's 32,767-character limit.");
 
         using var output = new CappedStream(options.MaximumWorkbookBytes);
         using (var zip = new ZipArchive(output, ZipArchiveMode.Create, true, Encoding.UTF8))
@@ -536,6 +539,11 @@ internal static class FinancialReportWorkbookWriter
     }
     private static bool ValidSheetName(string name)=>name.Length is >0 and <=31
         &&name.IndexOfAny(['[',']','*','?','/','\\',':'])<0;
+    private static bool CellTextExceedsExcelLimit(string? value)
+    {
+        if (value is null || value.Length <= ExcelTextCellCharacterLimit) return false;
+        return value.EnumerateRunes().Take(ExcelTextCellCharacterLimit + 1).Count() > ExcelTextCellCharacterLimit;
+    }
     private static string Column(int number){var value="";while(number>0){number--;value=(char)('A'+number%26)+value;number/=26;}return value;}
     private sealed class CappedStream(long maximum):MemoryStream
     {

@@ -267,7 +267,7 @@ function renderChipList(container, items, onRemove) {
 }
 
 // Matches an "Approved by"-type role by substring, not an exact string - mirrors
-// routers/audit_rules.py's is_approval_role() (which itself mirrors verification.py's
+// Audit Rules API's is_approval_role() (which itself mirrors Verification API's
 // existing 'approv' in role_name.lower() convention). Kept defined but unused (non-destructive
 // convention) now that renderRoleChips() no longer renders a per-role Required Authority input
 // (confirmed fix) — requiredAuthorityState is still populated from/sent to the backend
@@ -968,7 +968,7 @@ async function saveDocument(triggerBtn) {
 
     // Physical Bill evidence type (Phase 4 of 8): forced choice, no default. The backend still
     // defaults a missing document_type to 'linked_template' (resolve_document_type(),
-    // routers/audit_rules.py) - this UI is deliberately stricter, so the choice is always explicit.
+    // Audit Rules API) - this UI is deliberately stricter, so the choice is always explicit.
     const documentType = arDocumentTypeSelect.value;
     if (!documentType) {
         showDetailStatus('❌ Document type is required.', 'error');
@@ -2816,7 +2816,7 @@ const arCategoryClearedRequirementsList = document.getElementById('arCategoryCle
 
 // ---------- CATEGORY DETAIL: CLEARED REQUIREMENTS SUMMARY (Phase 2 of 3) ----------
 // Read-only "what does Cleared require for this Category" bullets, fetched fresh from the
-// Phase 1 backend endpoint (routers/audit_rules.py) on every Category detail open — no manual
+// Phase 1 backend endpoint (Audit Rules API) on every Category detail open — no manual
 // toggles, no local/cached state, reflects live backend state exactly. A brand-new/unsaved
 // Category has no id yet, so it shows a "save first" hint instead (same convention as the
 // Signature Specimens section's "Save the document first" hint).
@@ -3587,7 +3587,7 @@ function renderCategoryCrossCheckChips() {
 
     // Rebuild the "add cross-check" picker. A cross-check is only selectable once every
     // one of its own documents is already in this Category's Documents list (mirrors
-    // validate_category_payload()'s server-side containment rule, routers/audit_rules.py)
+    // validate_category_payload()'s server-side containment rule, Audit Rules API)
     // — ineligible ones stay visible but disabled with a hint, rather than hidden, so the
     // user can see what's blocking them.
     arCategoryAddCrossCheckSelect.innerHTML = '';
@@ -4146,7 +4146,7 @@ async function saveCategory(triggerBtn) {
         const result = await res.json();
         // The server's validation error already names the specific conflicting
         // Cross-check and Document ID(s) (validate_category_payload(), routers/
-        // audit_rules.py) — surfacing result.detail as-is already satisfies "a clear
+        // Audit Rules API) — surfacing result.detail as-is already satisfies "a clear
         // inline error naming which Cross-check/Document conflicts", no extra parsing
         // needed here.
         if (!res.ok) throw new Error(result.detail || result.message || 'Failed to save category');
@@ -5319,7 +5319,7 @@ arVoucherCheckRestoreBtn.addEventListener('click', restoreVoucherCheck);
 // =====================================================================================
 // ASSERTIONS (Assertions Phase 1 of 5, new)
 // A 5th reusable entity type: audit_rule_assertions. Fixed master list (Existence/Occurrence,
-// Completeness, Accuracy/Valuation, Cut-off, Authorisation), seeded in database.py, ordered by
+// Completeness, Accuracy/Valuation, Cut-off, Authorisation), seeded in C# data layer, ordered by
 // sort_order (server-assigned, conventional audit-standard order) - same non-alphabetical
 // precedent as Voucher-level Checks above, but no drag-to-reorder here. Soft-delete/restore
 // like Documents/Categories/Voucher-level Checks. No pagination - this list stays small, same

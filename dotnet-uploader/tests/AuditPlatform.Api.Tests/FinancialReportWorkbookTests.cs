@@ -1,5 +1,7 @@
 using AuditPlatform.Api.Reports;
 using AuditPlatform.Api.Workbooks;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO.Compression;
 using System.Xml.Linq;
 using Xunit;
@@ -87,10 +89,71 @@ public sealed class FinancialReportWorkbookTests
     }
 
     [Fact]
-    public void WorkbookPreservesLegacyCashflowSummaryAndLedgerwiseGoldenCells()
+    public void WorkbookRejectsTextBeyondExcelCellLimitAndPreservesUnicodeAtTheLimit()
     {
-        // These rows mirror the controlled Python build_cashflow_workbook fixture for January 2026.
-        // The expected report values are checked in; this test does not run or depend on Python.
+        var options = new ReportInputOptions();
+        var maximumAscii = new string('x', 32767);
+        byte[] accepted = FinancialReportWorkbookWriter.Write([
+            new FinancialReportWorkbookSheet("Report", new IReadOnlyList<string?>[]
+            { new string?[] { "Evidence" }, new string?[] { maximumAscii } })
+        ], options, TestContext.Current.CancellationToken);
+        Assert.NotEmpty(accepted);
+
+        var maximumUnicode = string.Concat(Enumerable.Repeat("🧾", 32767));
+        accepted = FinancialReportWorkbookWriter.Write([
+            new FinancialReportWorkbookSheet("Report", new IReadOnlyList<string?>[]
+            { new string?[] { "Evidence" }, new string?[] { maximumUnicode } })
+        ], options, TestContext.Current.CancellationToken);
+        Assert.NotEmpty(accepted);
+
+        var oversized = new string('x', 32768);
+        var error = Assert.Throws<InvalidDataException>(() => FinancialReportWorkbookWriter.Write([
+            new FinancialReportWorkbookSheet("Report", new IReadOnlyList<string?>[]
+            { new string?[] { "Evidence" }, new string?[] { oversized } })
+        ], options, TestContext.Current.CancellationToken));
+        Assert.Contains("32,767-character limit", error.Message);
+    }
+
+    [Fact]
+    public void LargeSyntheticWorkbookReportsWriterTimeAndManagedAllocation()
+    {
+        const int dataRows = 20000;
+        var rows = new IReadOnlyList<string?>[dataRows + 1];
+        rows[0] = new string?[] { "Source row", "Account code", "Account", "Amount", "Voucher", "Description", "Status", "Count" };
+        for (var index = 1; index <= dataRows; index++)
+        {
+            rows[index] = new string?[]
+            {
+                index.ToString(CultureInfo.InvariantCulture),
+                $"AC{index % 5000:D4}",
+                $"Account {index % 1000:D4}",
+                (index % 997).ToString(CultureInfo.InvariantCulture),
+                $"V-{index:D8}",
+                $"Synthetic report evidence row {index:D8}",
+                index % 7 == 0 ? "Review" : "Matched",
+                (index % 12).ToString(CultureInfo.InvariantCulture)
+            };
+        }
+
+        var options = new ReportInputOptions { MaximumWorkbookRows = dataRows + 1 };
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var timer = Stopwatch.StartNew();
+        byte[] workbook = FinancialReportWorkbookWriter.Write([
+            new FinancialReportWorkbookSheet("Report", rows)
+        ], options, TestContext.Current.CancellationToken);
+        timer.Stop();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Console.WriteLine($"Synthetic workbook: {dataRows:N0} rows, {workbook.Length:N0} bytes, " +
+            $"{timer.ElapsedMilliseconds:N0} ms, {allocated:N0} managed bytes allocated on the writing thread.");
+        Assert.InRange(workbook.Length, 1, options.MaximumWorkbookBytes);
+    }
+
+    [Fact]
+    public void WorkbookPreservesCashflowSummaryAndLedgerwiseGoldenCells()
+    {
+        // Fixed rows define the expected January 2026 Cashflow workbook output.
+        // Expected report values are fixed here; the test is fully self-contained.
         byte[] workbook = FinancialReportWorkbookWriter.Write([
             new FinancialReportWorkbookSheet("Cashflows Summary", new IReadOnlyList<string?>[]
             {

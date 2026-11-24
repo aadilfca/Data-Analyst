@@ -29,10 +29,10 @@ public sealed class FinancialStatementCalculationTests
     }
 
     [Fact]
-    public void BalanceSheetMatchesLegacyGoldenAmountsForTheControlledTrialBalance()
+    public void BalanceSheetMatchesGoldenAmountsForTheControlledTrialBalance()
     {
-        // Golden values were captured from Python's build_balance_sheet using this same synthetic source.
-        // Keep them here as data so the C# runtime and tests never call Python.
+        // Fixed reference values define the expected result for this synthetic source.
+        // Keeping fixed values makes this test self-contained.
         var result=new FinancialStatementCalculationService().Calculate(BalancedSnapshot(),
             FinancialStatementSection.BalanceSheet,TestContext.Current.CancellationToken);
 
@@ -185,7 +185,7 @@ public sealed class FinancialStatementCalculationTests
     }
 
     [Fact]
-    public void PythonCompatibleContextKeyMatchesGoldenVector()
+    public void ContextKeyMatchesGoldenVector()
     {
         var snapshot=BalancedSnapshot();
         var key=FinancialStatementCalculationService.FinancialStatementContextKey(
@@ -196,7 +196,7 @@ public sealed class FinancialStatementCalculationTests
     }
 
     [Fact]
-    public void PythonContextHashPreservesFloatNotationAndUnicode()
+    public void ContextHashPreservesFloatNotationAndUnicode()
     {
         var snapshot=BalancedSnapshot();
         var accounts=snapshot.TrialBalanceAccounts.Items.ToArray();

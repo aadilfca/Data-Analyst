@@ -5,7 +5,7 @@ using AuditPlatform.Api.Workbooks;
 
 namespace AuditPlatform.Api.Uploads;
 
-// Finite coefficient * 10^-scale. Input bounds follow the Python Footing
+// Finite coefficient * 10^-scale. Input bounds follow the established Footing
 // parser; arithmetic headroom covers their aligned sums over a bounded workbook.
 // This type never changes a source cell or approves report calculation policy.
 public readonly record struct UploadExactAmount : IComparable<UploadExactAmount>

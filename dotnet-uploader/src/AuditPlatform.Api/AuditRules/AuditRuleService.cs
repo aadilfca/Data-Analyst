@@ -1666,6 +1666,12 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         command.Parameters.AddWithValue(tenant); await command.ExecuteNonQueryAsync(ct);
     }
 
+    internal static async Task EnsureCurrentSnapshotAsync(PostgresTransactionContext db, int tenant, CancellationToken ct)
+    {
+        await EnsureStateAsync(db, tenant, ct);
+        await EnsureSnapshotAsync(db, tenant, ct);
+    }
+
     private async Task<long> PublishChangeAsync(PostgresTransactionContext db, int tenant, string kind, int id,
         string action, string? name, int actor, CancellationToken ct)
     {
@@ -1685,7 +1691,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         return version;
     }
 
-    private async Task EnsureSnapshotAsync(PostgresTransactionContext db, int tenant, CancellationToken ct)
+    private static async Task EnsureSnapshotAsync(PostgresTransactionContext db, int tenant, CancellationToken ct)
     {
         long version = await CurrentVersionAsync(db, tenant, ct);
         await using (var current = db.CreateCommand("""
@@ -1721,7 +1727,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         await PublishSnapshotsAsync(db, tenant, version, ct);
     }
 
-    private async Task<bool> CategorySnapshotsCurrentAsync(PostgresTransactionContext db, int tenant, long version, CancellationToken ct)
+    private static async Task<bool> CategorySnapshotsCurrentAsync(PostgresTransactionContext db, int tenant, long version, CancellationToken ct)
     {
         var expected = await BuildCategorySnapshotsAsync(db, tenant, ct);
         await using var command = db.CreateCommand("""
@@ -2424,7 +2430,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
         else if (listView && entity.Kind == "cross-checks")
             result = new JsonObject { ["id"] = entity.Id, ["name"] = ReadString(definition["name"]),
                 ["is_active"] = entity.IsActive, ["documents"] = result["documents"]?.DeepClone() ?? new JsonArray() };
-        // Voucher Check assertion tags have their own route in Python; keep the
+        // Voucher Check assertion tags use a separate endpoint; keep the
         // base entity response limited to its authored fields.
         return JsonDocument.Parse(result.ToJsonString(JsonOptions)).RootElement.Clone();
     }

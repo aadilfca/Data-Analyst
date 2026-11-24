@@ -270,8 +270,8 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-23: Phase 8 Dashboard review confirmed active cards use packaged C# pages; one dashboard GET retry notice appeared. See CHANGELOG_ARCHIVE.md.
-- 2026-11-23: C# phases 6B/7C passed; tests run without Python and legacy Python test scripts were removed. Phase 8 is next. See CHANGELOG_ARCHIVE.md.
+- 2026-11-23: Phase 8 static frontend review covered packaged pages/assets; authenticated browser acceptance awaits port 5080. See C# Phase 8 frontend review.
+- 2026-11-23: C# phases 6B/7C passed; tests run without Python and legacy Python test scripts were removed. See CHANGELOG_ARCHIVE.md.
 - 2026-11-22: P62 local readiness, Supabase isolation and Aadil's feature acceptance passed; Render is postponed. See C# local report and Verification acceptance.
 - 2026-11-22: Added the C#-owned dashboard and shared assets; other module pages still use the packaged static fallback. See C# frontend ownership — dashboard.
 - 2026-11-22: Removed C# Python forwarding and bridge ownership switches; Python remains a separate rollback app. See C# bridge retirement.

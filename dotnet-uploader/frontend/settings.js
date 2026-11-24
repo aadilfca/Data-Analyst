@@ -69,8 +69,8 @@ const SETTINGS_DEF = {
 let currentSettings = {};
 let currentCashflowDefaults = {};
 
-// The .NET shell supplies this capability for its own page only. Python's
-// existing flow is retained; the backend remains the authority on every write.
+// This capability is enabled only by the .NET shell.
+// The backend remains the authority on every write.
 function canEditTenantSettings() {
     return !window.AppTenantSettings?.enabled || window.AppTenantSettings.canEdit === true;
 }

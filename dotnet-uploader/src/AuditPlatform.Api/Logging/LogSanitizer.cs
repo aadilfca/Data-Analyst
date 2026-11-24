@@ -101,7 +101,7 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
             case "INSERT": return (null, null);
             case "DELETE":
                 if (oldRow.Count == 0) return (null, null);
-                var canonical = PythonJson(record.OldRow!.Value);
+                var canonical = CanonicalJson(record.OldRow!.Value);
                 var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
                 var fingerprint = "{\"_row_fingerprint\":\"" + hash + "\"}";
                 if (Encoding.UTF8.GetByteCount(fingerprint) > limits.MetadataMaxBytes)
@@ -114,7 +114,7 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
                 {
                     var hadOld = oldRow.TryGetValue(key, out var old);
                     var hasNew = newRow.TryGetValue(key, out var current);
-                    if (hadOld && hasNew && PythonEqual(old, current)) continue;
+                    if (hadOld && hasNew && JsonValuesEqual(old, current)) continue;
                     var permitted = record.ValueFields.Contains(key) && !SensitiveKey(key);
                     before[key] = permitted ? SafeValue(hadOld ? old : default, 0) : Redacted;
                     after[key] = permitted ? SafeValue(hasNew ? current : default, 0) : Redacted;
@@ -212,9 +212,9 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
         return value.Value.EnumerateObject().ToDictionary(p => p.Name, p => p.Value, StringComparer.Ordinal);
     }
 
-    // The DELETE fingerprint follows Python json.dumps(sort_keys=True,
-    // separators=(',', ':'), ensure_ascii=True). Raw rows are never persisted here.
-    private string PythonJson(JsonElement value, int depth = 0)
+    // DELETE fingerprints use sorted keys, compact separators, and ASCII escaping.
+    // Raw rows are never persisted here.
+    private string CanonicalJson(JsonElement value, int depth = 0)
     {
         if (depth > limits.MetadataMaxDepth)
             throw new ArgumentException("Audit JSON nesting exceeds its permitted depth.");
@@ -222,10 +222,10 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
         {
             JsonValueKind.Object => "{" + string.Join(",", value.EnumerateObject()
                 .OrderBy(p => p.Name, UnicodeComparer.Instance)
-                .Select(p => Quote(p.Name) + ":" + PythonJson(p.Value, depth + 1))) + "}",
-            JsonValueKind.Array => "[" + string.Join(",", value.EnumerateArray().Select(v => PythonJson(v, depth + 1))) + "]",
+                .Select(p => Quote(p.Name) + ":" + CanonicalJson(p.Value, depth + 1))) + "}",
+            JsonValueKind.Array => "[" + string.Join(",", value.EnumerateArray().Select(v => CanonicalJson(v, depth + 1))) + "]",
             JsonValueKind.String => Quote(value.GetString()!),
-            JsonValueKind.Number => IsFloat(value) ? PythonFloat(value.GetDouble())
+            JsonValueKind.Number => IsFloat(value) ? FormatStoredNumber(value.GetDouble())
                 : BigInteger.Parse(value.GetRawText(), CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture),
             JsonValueKind.True => "true", JsonValueKind.False => "false", JsonValueKind.Null => "null",
             _ => throw new ArgumentException("Unsupported audit JSON value.")
@@ -244,7 +244,7 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
         return output.Append('"').ToString();
     }
 
-    private static string PythonFloat(double value)
+    private static string FormatStoredNumber(double value)
     {
         if (!double.IsFinite(value)) throw new ArgumentException("Nonfinite audit values are not supported.");
         if (value == 0) return BitConverter.DoubleToInt64Bits(value) < 0 ? "-0.0" : "0.0";
@@ -268,7 +268,7 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
 
     private static bool IsFloat(JsonElement value) => value.GetRawText().IndexOfAny(['.', 'e', 'E']) >= 0;
 
-    private static bool PythonEqual(JsonElement a, JsonElement b)
+    private static bool JsonValuesEqual(JsonElement a, JsonElement b)
     {
         var numericA = a.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False;
         var numericB = b.ValueKind is JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False;
@@ -288,9 +288,9 @@ public sealed class LogSanitizer(IOptions<LogPersistenceOptions> options)
         return a.ValueKind switch
         {
             JsonValueKind.Object => a.EnumerateObject().Count() == b.EnumerateObject().Count()
-                && a.EnumerateObject().All(p => b.TryGetProperty(p.Name, out var other) && PythonEqual(p.Value, other)),
+                && a.EnumerateObject().All(p => b.TryGetProperty(p.Name, out var other) && JsonValuesEqual(p.Value, other)),
             JsonValueKind.Array => a.GetArrayLength() == b.GetArrayLength()
-                && a.EnumerateArray().Zip(b.EnumerateArray()).All(p => PythonEqual(p.First, p.Second)),
+                && a.EnumerateArray().Zip(b.EnumerateArray()).All(p => JsonValuesEqual(p.First, p.Second)),
             JsonValueKind.String => a.GetString() == b.GetString(), _ => true
         };
     }

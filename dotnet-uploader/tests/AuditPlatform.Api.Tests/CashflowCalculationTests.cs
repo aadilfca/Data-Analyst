@@ -1,6 +1,8 @@
 using AuditPlatform.Api.Cashflows;
+using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.FinancialStatements;
 using AuditPlatform.Api.Reports;
+using AuditPlatform.Api.Workbooks;
 using Xunit;
 
 namespace AuditPlatform.Api.Tests;
@@ -90,6 +92,56 @@ public sealed class CashflowCalculationTests
         Assert.Equal("25", transfer.Amount);
         Assert.Equal("Confirmed", transfer.Status);
         Assert.True(transfer.Matched);
+    }
+
+    [Fact]
+    public void ReversalAndSelectedTransferResultsFlowThroughCashflowWorkbookBuilder()
+    {
+        var snapshot = Snapshot() with
+        {
+            Scope = Snapshot().Scope with { SelectedAccountCodes = ["B1"] },
+            ClientData = Dataset([
+                Row(1, "Bank", "B1", "100", "0", "SALE"), Row(2, "Revenue", "R1", "0", "100", "SALE"),
+                Row(3, "Bank", "B1", "0", "40", "REFUND"), Row(4, "Revenue", "R1", "40", "0", "REFUND"),
+                Row(5, "Bank", "B1", "0", "25", "TRANSFER"), Row(6, "Bank", "B2", "25", "0", "TRANSFER")]),
+            CashflowSettings = Dataset([new ReportCashflowSettings(7, true, "gross", 30, 3)]),
+            CashflowTreasuryAccounts = Dataset([new ReportCashflowTreasuryAccount("B1", "bank"),
+                new ReportCashflowTreasuryAccount("B2", "bank")])
+        };
+        var cashflows = new CashflowCalculationService().Calculate(snapshot, new DateOnly(2026, 1, 1),
+            new DateOnly(2026, 1, 31), "month", "bank", TestContext.Current.CancellationToken);
+        var reconciliation = new FinancialReportReconciliationResult("Unavailable", cashflows.InputFingerprint,
+            "Unavailable", [], [], ["No imported independent ledger evidence is available."]);
+        var sheets = FinancialReportWorkbookWriter.CashflowSheets(cashflows, reconciliation,
+            new CashflowWorkbookFilter(TreasuryView: "bank", SelectedAccountCodes: ["B1"]),
+            includeReconciliation: true, snapshot: snapshot);
+
+        var summary = Assert.Single(sheets, sheet => sheet.Name == "Cashflows Summary");
+        Assert.Contains(summary.Rows, row => row.Count >= 2 && row[0] == "Sales" && row.Contains("60"));
+        var transferSheet = Assert.Single(sheets, sheet => sheet.Name == "Internal Transfers");
+        var transferRow = Assert.Single(transferSheet.Rows, row => row.Count > 14 && row[0] == "TRANSFER");
+        Assert.Equal("B1", transferRow[4]);
+        Assert.Equal("B2", transferRow[7]);
+        Assert.Equal("25", transferRow[10]);
+        Assert.Equal("True", transferRow[14]);
+        var drilldown = Assert.Single(sheets, sheet => sheet.Name == "Cashflows Ledger Drill-down");
+        Assert.DoesNotContain(drilldown.Rows.Skip(1), row => row.Count > 2 && row[2] == "B2");
+        Assert.Contains(sheets, sheet => sheet.Name == "Reconciliation Proof");
+
+        byte[] workbook = FinancialReportWorkbookWriter.Write(sheets, new ReportInputOptions(),
+            TestContext.Current.CancellationToken);
+        string path = Path.Combine(Path.GetTempPath(), "cashflow-built-" + Guid.NewGuid().ToString("N") + ".xlsx");
+        try
+        {
+            File.WriteAllBytes(path, workbook);
+            var exportedTransfers = WorkbookReader.Read(path, ".xlsx", "Internal Transfers",
+                ct: TestContext.Current.CancellationToken).ToArray();
+            Assert.Contains(exportedTransfers.SelectMany(row => row.Cells).Select(cell => cell.Text),
+                value => value == "TRANSFER");
+            Assert.Contains(exportedTransfers.SelectMany(row => row.Cells).Select(cell => cell.Text),
+                value => value == "25");
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
     }
 
     [Fact]

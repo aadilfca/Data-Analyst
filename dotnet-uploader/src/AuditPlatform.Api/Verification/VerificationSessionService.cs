@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using AuditPlatform.Api.AuditRules;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
@@ -46,7 +47,7 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         {
             var actor = await AuthorizeClientAsync(db, session, request.ClientId, inner);
             if (actor is null) return new("forbidden", Code: "verification_access_denied");
-            var rulebook = await ReadCurrentRulebookAsync(db, actor.TenantId, inner);
+            var rulebook = await ReadOrInitializeCurrentRulebookAsync(db, actor.TenantId, inner);
             if (rulebook is null) return new("unavailable", Code: "verification_rulebook_unavailable");
             var routing = await ReadRoutingAsync(db, request.ClientId, inner);
             string[] selectedCodes = routing.Where(x => x.Stream == request.SessionType).Select(x => x.Code).Distinct(StringComparer.Ordinal).ToArray();
@@ -333,7 +334,7 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         {
             var owner = await SessionOwnerAsync(db, session, sessionId, false, inner);
             if (owner is null) return new("not_found", Code: "verification_session_not_found");
-            var current = await ReadCurrentRulebookAsync(db, owner.Value.Actor.TenantId, inner);
+            var current = await ReadOrInitializeCurrentRulebookAsync(db, owner.Value.Actor.TenantId, inner);
             if (current is null) return new("unavailable", Code: "verification_rulebook_unavailable");
             if (owner.Value.RulebookVersion is int oldVersion && oldVersion != current.Value.Version)
                 return await VersionMismatch(db, inner, sessionId, owner.Value.Actor.TenantId, oldVersion, current.Value.Version, token);
@@ -350,7 +351,7 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
             if (owner is null) return new("not_found", Code: "verification_session_not_found");
             if (IsReadOnlyLegacyRulebookVersion(owner.Value.RulebookVersion))
                 return new("conflict", Code: "verification_legacy_session_read_only");
-            var current = await ReadCurrentRulebookAsync(db, owner.Value.Actor.TenantId, inner);
+            var current = await ReadOrInitializeCurrentRulebookAsync(db, owner.Value.Actor.TenantId, inner);
             if (current is null) return new("unavailable", Code: "verification_rulebook_unavailable");
             if (owner.Value.RulebookVersion == current.Value.Version)
                 return Success(new { session_id = sessionId, rulebook_version = current.Value.Version, recovered = false,
@@ -578,7 +579,7 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
     {
         var owner = await SessionOwnerAsync(db, session, sessionId, false, ct);
         if (owner is null) return (null, new("not_found", Code: "verification_session_not_found"));
-        var current = await ReadCurrentRulebookAsync(db, owner.Value.Actor.TenantId, ct);
+        var current = await ReadOrInitializeCurrentRulebookAsync(db, owner.Value.Actor.TenantId, ct);
         if (current is null) return (null, new("unavailable", Code: "verification_rulebook_unavailable"));
         if (owner.Value.RulebookVersion is int oldVersion && oldVersion != current.Value.Version)
             return (null, await VersionMismatch(db, ct, sessionId, owner.Value.Actor.TenantId, oldVersion, current.Value.Version, ct));
@@ -596,7 +597,7 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         if (clientId < 1) return (null, new("forbidden", Code: "verification_client_access_denied"));
         var actor = await AuthorizeClientAsync(db, session, clientId, ct);
         if (actor is null) return (null, new("forbidden", Code: "verification_client_access_denied"));
-        var current = await ReadCurrentRulebookAsync(db, actor.TenantId, ct);
+        var current = await ReadOrInitializeCurrentRulebookAsync(db, actor.TenantId, ct);
         if (current is null) return (null, new("unavailable", Code: "verification_rulebook_unavailable"));
         int version = checked((int)current.Value.Version);
         return (new(actor.TenantId, actor.UserId, actor.Username, actor.TenantRole,
@@ -664,6 +665,15 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
         command.Parameters.AddWithValue(tenant); await using var reader = await command.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct)) return null;
         using var document = JsonDocument.Parse(reader.GetString(1)); return (reader.GetInt64(0), document.RootElement.Clone());
+    }
+
+    private static async Task<(long Version, JsonElement Payload)?> ReadOrInitializeCurrentRulebookAsync(
+        PostgresTransactionContext db, int tenant, CancellationToken ct)
+    {
+        var current = await ReadCurrentRulebookAsync(db, tenant, ct);
+        if (current is not null) return current;
+        await AuditRuleService.EnsureCurrentSnapshotAsync(db, tenant, ct);
+        return await ReadCurrentRulebookAsync(db, tenant, ct);
     }
 
     private static async Task<(long Version, JsonElement Payload)?> ReadCurrentRulebookLockedAsync(
@@ -872,15 +882,15 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
             if (documentColumn is null && row.ValueKind == JsonValueKind.Object)
             {
                 var first = row.EnumerateObject().FirstOrDefault();
-                if (first.Name is not null) return DocumentPrefix(detail.TemplateId) + PythonScalar(first.Value).Trim();
+                if (first.Name is not null) return DocumentPrefix(detail.TemplateId) + FormatScalarValue(first.Value).Trim();
             }
             if (documentColumn is not null && row.ValueKind == JsonValueKind.Object
                 && row.TryGetProperty(documentColumn.Key, out var value) && value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
             {
-                string text = PythonScalar(value);
+                string text = FormatScalarValue(value);
                 if (text.Length > 0) return DocumentPrefix(detail.TemplateId) + text.Trim();
             }
-            string representation = document is null ? detail.RowData : PythonRepr(document.RootElement);
+            string representation = document is null ? detail.RowData : FormatValueRepresentation(document.RootElement);
             string hash = Convert.ToHexString(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes(representation))).ToLowerInvariant()[..8];
             return DocumentPrefix(detail.TemplateId) + hash;
         }
@@ -893,21 +903,21 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
     }
 
     private static string DocumentPrefix(int templateId) => templateId.ToString(CultureInfo.InvariantCulture) + "-";
-    private static string PythonScalar(JsonElement value) => value.ValueKind switch
+    private static string FormatScalarValue(JsonElement value) => value.ValueKind switch
     {
         JsonValueKind.String => value.GetString() ?? "",
         JsonValueKind.True => "True", JsonValueKind.False => "False", JsonValueKind.Null => "None",
         _ => value.ToString()
     };
-    private static string PythonRepr(JsonElement value) => value.ValueKind switch
+    private static string FormatValueRepresentation(JsonElement value) => value.ValueKind switch
     {
-        JsonValueKind.Object => "{" + string.Join(", ", value.EnumerateObject().Select(p => PythonReprString(p.Name) + ": " + PythonRepr(p.Value))) + "}",
-        JsonValueKind.Array => "[" + string.Join(", ", value.EnumerateArray().Select(PythonRepr)) + "]",
-        JsonValueKind.String => PythonReprString(value.GetString() ?? ""),
+        JsonValueKind.Object => "{" + string.Join(", ", value.EnumerateObject().Select(p => QuoteValueString(p.Name) + ": " + FormatValueRepresentation(p.Value))) + "}",
+        JsonValueKind.Array => "[" + string.Join(", ", value.EnumerateArray().Select(FormatValueRepresentation)) + "]",
+        JsonValueKind.String => QuoteValueString(value.GetString() ?? ""),
         JsonValueKind.True => "True", JsonValueKind.False => "False", JsonValueKind.Null => "None",
         _ => value.GetRawText()
     };
-    private static string PythonReprString(string value)
+    private static string QuoteValueString(string value)
     {
         char quote = value.Contains('\'') && !value.Contains('"') ? '"' : '\'';
         var result = new System.Text.StringBuilder().Append(quote);
@@ -926,7 +936,7 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
     {
         var procedure = ParseJsonValue(detail.ProcedureData) ?? JsonSerializer.SerializeToElement(new Dictionary<string, object?>());
         string transactionType = procedure.ValueKind == JsonValueKind.Object && procedure.TryGetProperty("transaction_type", out var type)
-            ? PythonScalar(type) : "";
+            ? FormatScalarValue(type) : "";
         return new
         {
             detail_id = detail.Id, client_data_id = detail.ClientDataId, voucher_id = detail.TransactionRef,

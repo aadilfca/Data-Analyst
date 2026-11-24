@@ -146,7 +146,7 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
             {
                 services.PostConfigure<PostgresOptions>(o=> {o.Enabled=true;o.ConnectionString=fixture.ConnectionString;});
                 services.PostConfigure<AuthenticationOptions>(o=> {o.Enabled=true;o.PublicOrigin="http://127.0.0.1:5080";});
-                services.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true);
+                services.PostConfigure<ClientManagementOptions>(o=>{o.Enabled=true;o.WriteEnabled=true;});
             });
         });
         using var http = app.CreateClient(new WebApplicationFactoryClientOptions {HandleCookies=false});

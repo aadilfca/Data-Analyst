@@ -60,7 +60,7 @@ async function fetchTemplateConfig(templateId) {
             // Column-order fix: the template's own sort_order-ordered column list, used by
             // renderTemplateData() instead of a row's own row_data key order (unreliable for
             // a derived field like Rate — see reorder_row_data_by_template()'s docstring,
-            // routers/import_export.py). Already present on this same list response, no
+            // Upload API). Already present on this same list response, no
             // extra fetch needed.
             columns: match.columns || []
         };
@@ -151,7 +151,7 @@ function renderTemplateData(rows, emptyMessage = 'No data found for the selected
     // Column-order fix: use the template's own sort_order-ordered column list (fetched once
     // into currentTemplateConfig.columns) instead of a row's own row_data key order, which
     // isn't reliable for a derived field like Rate (see reorder_row_data_by_template()'s
-    // docstring, routers/import_export.py). Falls back to the row's own keys if that
+    // docstring, Upload API). Falls back to the row's own keys if that
     // config didn't carry any (shouldn't happen for a valid template, defensive only).
     const configColumns = (currentTemplateConfig && currentTemplateConfig.columns) || [];
     const headers = configColumns.length

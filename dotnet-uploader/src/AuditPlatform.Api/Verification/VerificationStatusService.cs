@@ -9,7 +9,7 @@ using Npgsql;
 
 namespace AuditPlatform.Api.Verification;
 
-/// <summary>Recomputes the Python-compatible Cleared/Query gates from the frozen rule snapshots.</summary>
+/// <summary>Recomputes the established Cleared/Query rules from the frozen rule snapshots.</summary>
 public sealed class VerificationStatusService
 {
     private sealed record EvidenceLink(int DocumentId, int ClientDataId, bool SignatureException);
@@ -28,7 +28,7 @@ public sealed class VerificationStatusService
         return result;
     }
 
-    // Python's line-status explanation is explicitly read-only. This projects the same native
+    // Line-status explanations are read-only. This projects the same native
     // gates without calling RecomputeLineAsync (which persists status/category snapshots).
     internal async Task<VerificationRuntimeResult> LineStatusReasonAsync(PostgresTransactionContext db,
         VerificationReviewContext owner, int detailId, CancellationToken ct)
@@ -170,7 +170,7 @@ public sealed class VerificationStatusService
             : "(voucher-wide) Not yet marked done: " + string.Join(", ", outstanding);
     }
 
-    // Audit Workbook needs the same per-Document completion badges as the Python read model,
+    // Audit Workbook needs the same per-Document completion badges as the stored status summary,
     // but a GET must never recompute or persist Cleared/Query status. Reuse the existing Form,
     // Physical Bill, evidence-link, role-tick and voucher-check rules in a read-only projection.
     internal async Task<IReadOnlyDictionary<int, VerificationAuditWorkbookProcedureProgress>>
@@ -327,7 +327,7 @@ public sealed class VerificationStatusService
 
         var siblingIds = await ReadSiblingIdsAsync(db, detailId, clientDataId, owner.ClientId, ct);
         var links = await ReadEvidenceLinksAsync(db, owner.TenantId, siblingIds, owner.ClientId, ct);
-        // Python's evaluator treats every active Document compiled into the Category snapshot
+        // The evaluator includes every active Document compiled into the Category snapshot
         // as part of the evidence gate, regardless of the editor's display-only required flag.
         var categoryDocuments = ArrayProperty(profile, "documents").ToArray();
         bool documentsOk = await RequiredDocumentsCompleteAsync(db, owner.TenantId, siblingIds, categoryDocuments,

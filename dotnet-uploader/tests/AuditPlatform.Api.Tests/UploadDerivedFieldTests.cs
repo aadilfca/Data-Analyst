@@ -43,7 +43,7 @@ public sealed class UploadDerivedFieldTests(DerivedGoldenFixture golden) : IClas
     {public DateTimeOffset Current=DateTimeOffset.UtcNow;public Action? OnRead;public override DateTimeOffset GetUtcNow() {OnRead?.Invoke();return Current;}}
     private static UploadValidationPlanOptions Settings()=>new(){Enabled=true,SigningKey=Convert.ToBase64String(Enumerable.Range(0,32).Select(i=>(byte)i).ToArray())};
     [Fact]
-    public void RateAndProjectionMatchIndependentPython()
+    public void RateAndProjectionMatchIndependentReferenceValues()
     {
         foreach(var vector in golden.Oracle.RootElement.GetProperty("rates").EnumerateArray())
         {

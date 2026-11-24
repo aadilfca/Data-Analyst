@@ -39,13 +39,13 @@ public static class UploadNumericParser
         string raw=cell.Kind==WorkbookCellKind.Number?cell.NumberToken??"":cell.Text??"";
         if(raw.Length>65536) return invalid;
         string text=Digits(Trim(raw));if(text.Length==0) return new(true);
-        // str.strip() accepts these separators, but Python float(raw) does not.
+        // These separators are whitespace; numeric parsing rejects them inside values.
         // Ledger text explicitly strips before parsing; ordinary fields do not.
         if(!ledger && raw.Any(c=>c is >= '\x1c' and <= '\x1f')) return invalid;
         bool native=cell.Kind==WorkbookCellKind.Number;
         if(!ledger || native)
         {
-            // Python float accepts Unicode decimal digits and single underscores
+            // Numeric parsing accepts Unicode decimal digits and single underscores
             // between digits. Ordinary numeric columns do not accept commas.
             if(!native) text=Regex.Replace(text,"(?<=[0-9])_(?=[0-9])","",RegexOptions.CultureInvariant,Deadline);
             string lower=text.ToLowerInvariant();

@@ -62,7 +62,7 @@ public sealed class UploadFootingTests(FootingGoldenFixture golden) : IClassFixt
     }
 
     [Fact]
-    public void ExactParsingAndArithmeticMatchHighPrecisionPythonBeyondDecimalCapacity()
+    public void ExactParsingAndArithmeticMatchHighPrecisionReferenceBeyondDecimalCapacity()
     {
         foreach(var item in golden.Oracle.RootElement.GetProperty("parse").EnumerateArray())
         {
@@ -81,7 +81,7 @@ public sealed class UploadFootingTests(FootingGoldenFixture golden) : IClassFixt
     }
 
     [Fact]
-    public void ThresholdsAndAcknowledgementsMatchPythonOnBothSigns()
+    public void ThresholdsAndAcknowledgementsMatchReferenceOnBothSigns()
     {
         int index=0;
         foreach(var item in golden.Oracle.RootElement.GetProperty("thresholds").EnumerateArray())

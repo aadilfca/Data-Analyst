@@ -156,7 +156,7 @@ public static class UploadDerivedFieldWriter
             await using(var table=db.CreateCommand("LOCK TABLE public.cashflow_voucher_occurrences IN SHARE ROW EXCLUSIVE MODE")) await table.ExecuteNonQueryAsync(ct);
             await PersistOccurrences(db,payload,file,rows,ct);
         }
-        // The compatibility revision must actually advance. Older Python helpers
+        // The compatibility revision must actually advance. Older calculation helpers
         // only update timestamps; never treat their constant revision as proof.
         if(profile.Keys.ContainsKey("account_code"))
         {

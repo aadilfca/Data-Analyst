@@ -47,7 +47,7 @@ public sealed class UploadImportReceiptTests(ReceiptGoldenFixture golden) : ICla
     private static IdentityRequest Request(string sheet="Base",string mode="replace_range")=>
         new(new(new(new(new(10,1,sheet,"rows",RequestId:Guid.NewGuid()),mode,5),true),"2026-04-01","2026-04-30",true));
     [Fact]
-    public void ExactControlsMatchExtractedPython()
+    public void ExactControlsMatchRecordedValues()
     {
         var expected=new FootingSummary(3,2,0,new Dictionary<int,string>{{3,"0.30"}},true);
         var source=new ReceiptSourceControls(expected,expected,[new(3,"col_3","Amount")],[],"col_1",true,"2026-04-01","2026-04-30",5,false);

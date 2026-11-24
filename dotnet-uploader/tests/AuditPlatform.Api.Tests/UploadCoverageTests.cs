@@ -64,7 +64,7 @@ public sealed class UploadCoverageTests(CoverageGoldenFixture golden) : IClassFi
     }
 
     [Fact]
-    public void CompleteDatesAndSuggestionsMatchActualPythonCoverageHelpers()
+    public void CompleteDatesAndSuggestionsMatchCoverageRules()
     {
         foreach(var vector in golden.Oracle.RootElement.GetProperty("vectors").EnumerateArray())
         {

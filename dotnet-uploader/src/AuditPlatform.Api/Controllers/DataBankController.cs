@@ -46,7 +46,7 @@ public sealed class DataBankController(DataBankService service, IOptions<DataBan
         Read(new("preview", client_id, template_id, date_start, date_end, page, limit, search, amount_min, amount_max, sunday_only,
             data_quality, ledger_account_code, include_metrics), ct);
 
-    // Native hosts must never forward an unported read or mutation to Python.
+    // This API handles its supported reads and mutations without forwarding requests.
     [Route("{**remaining}")]
     public IActionResult Unported() => Guard() ?? StatusCode(503, new { detail = "This Data Bank action is awaiting migration." });
     private IActionResult? Guard()

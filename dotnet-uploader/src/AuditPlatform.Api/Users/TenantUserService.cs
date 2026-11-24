@@ -76,8 +76,8 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
                 if (actor is null) return new(TenantUserStatus.Forbidden);
                 var hash = BCrypt.Net.BCrypt.HashPassword(password);
                 int userId;
-                // Global legacy role remains NULL: a tenant admin is never a
-                // Python/global administrator merely because of tenant role.
+                // Global platform role remains NULL: tenant administrators are not platform
+                // administrators solely because of their tenant role.
                 await using (var insert = db.CreateCommand("""
                     INSERT INTO public.users(username,password_hash,is_active,role)
                     VALUES($1,$2,TRUE,NULL) RETURNING id
@@ -157,7 +157,7 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
             await update.ExecuteNonQueryAsync(ct);
         }
         // Membership is rechecked by every tenant operation. Sessions remain
-        // usable in other tenants; this never certifies legacy Python routing.
+        // usable in other tenants; membership alone does not grant cross-workspace access.
         await AuditAsync(db, actor, tenantId, targetId, active ? "Reactivate" : "Deactivate", ct);
         return new(TenantUserStatus.Success, targetId);
     }, cancellationToken);

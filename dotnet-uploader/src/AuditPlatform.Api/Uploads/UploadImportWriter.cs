@@ -224,7 +224,7 @@ public sealed class UploadImportWriter(IOptions<UploadImportOptions> options,ICo
     internal static string RawJson(IReadOnlyDictionary<string,IdentityAtom> values)=>JsonSerializer.Serialize(values.ToDictionary(p=>p.Key,p=>Scalar(p.Value),StringComparer.Ordinal));
     public static string RawFingerprint(IReadOnlyDictionary<string,IdentityAtom> values)
     {
-        // Legacy raw guard: omit false-like values, Python Unicode sorting and
+        // Raw-value guard: omit false-like values and apply stable Unicode sorting with
         // ensure_ascii strings. This never becomes the financial value store.
         string Quote(string text)
         {

@@ -2,6 +2,7 @@
 setlocal
 set "PROJECT_DIR=%~dp0"
 if not defined ASPNETCORE_ENVIRONMENT set "ASPNETCORE_ENVIRONMENT=Development"
+if not defined VerificationRuntime__Enabled set "VerificationRuntime__Enabled=true"
 set "TRAY_EXE=%PROJECT_DIR%tools\AuditPlatform.Tray\bin\Release\net10.0-windows\AuditPlatform.Tray.exe"
 set "API_DLL=%PROJECT_DIR%src\AuditPlatform.Api\bin\Release\net10.0\AuditPlatform.Api.dll"
 if exist "%PROJECT_DIR%.dotnet\dotnet.exe" set "DOTNET_HOST_PATH=%PROJECT_DIR%.dotnet\dotnet.exe"

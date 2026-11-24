@@ -140,7 +140,7 @@ public sealed class AuditPersistenceTests(PostgresFixture fixture) : IClassFixtu
     [InlineData("{\"x\":1.0,\"a\":[true,null,{\"é\":\"\\n\\t/\"}]}", "2134be974648b280c206f18639ed2b15472feca1c54fc35612a6fe50e805fa18")]
     [InlineData("{\"x\":9007199254740993,\"y\":1.7976931348623157e308}", "61871f08b626d558de582f3c854d65fc77cc62eb7e2971b3e4c08dd1db3e4813")]
     [InlineData("{\"x\":0.0001,\"y\":1000000000000000.0,\"z\":5e-324}", "9ef3922a5f89def419eb57d6859b7484ab85368e5f491f7368695d7832ad3aef")]
-    public void Delete_fingerprints_match_independently_generated_python_vectors(string source, string expected)
+    public void Delete_fingerprints_match_reference_vectors(string source, string expected)
     {
         var result = Sanitizer.Compact(new(Event("DELETE"), 1, Json(source), null, new HashSet<string>()));
         Assert.Equal(expected, Json(result.Old!).GetProperty("_row_fingerprint").GetString());

@@ -459,7 +459,7 @@ function awFindLineByDetailId(uid) {
     return null;
 }
 
-// Mirrors the backend's own _rollup_voucher_status() rule exactly (routers/verification.py,
+// Mirrors the backend's own _rollup_voucher_status() rule exactly (Verification API,
 // documented in this project's CLAUDE.md Architecture notes): all lines Cleared -> Cleared; else
 // any line Query -> Query; else Pending (covers null/unclassified) — used to keep a voucher
 // group's own rollup status in sync client-side after a single line's status changes, without a

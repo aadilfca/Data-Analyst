@@ -3305,7 +3305,7 @@ previewModal.addEventListener('change', updateNativeExportButton);
 window.addEventListener('focus', () => { if (nativeDataBank?.history && historyModal.style.display === 'flex') void fetchUploadHistory(historyPage); });
 
 // P33 is a separate native path. Legacy paged/browser-built backups and purge
-// URLs above remain Python-only. No write is automatically retried.
+// The URLs above are not used by this C# page. No write is automatically retried.
 let nativePurgeController = null;
 let nativePurgeSequence = 0;
 let nativePurgePostStarted = false;

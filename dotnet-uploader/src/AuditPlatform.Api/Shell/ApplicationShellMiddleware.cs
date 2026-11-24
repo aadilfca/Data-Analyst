@@ -6,7 +6,7 @@ using Microsoft.Extensions.Options;
 namespace AuditPlatform.Api.Shell;
 
 // Only copied, flat C# frontend assets are served. No repository, workbook,
-// upload or Python static directory is mounted. HTML access is rechecked before its bytes leave.
+// upload or a second frontend directory is mounted. HTML access is rechecked before its bytes leave.
 public sealed class ApplicationShellMiddleware(RequestDelegate next)
 {
     private static readonly HashSet<string> PublicPages = ["login.html","app_info.html","privacy.html","terms.html"];
@@ -18,7 +18,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, IOptions<ApplicationShellOptions> options,
         TenantSessionService tenants, AuditPlatform.Api.Clients.TenantClientService clients,
         IOptions<SettingsManagementOptions> settings,IOptions<ColumnManagementOptions> columns,IOptions<TemplateManagementOptions> templates,IOptions<SavedMappingOptions> mappings,
-        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports,IOptions<DataIntegrityOptions> integrity,IOptions<StorageCleanupOptions> cleanup,IOptions<TrialBalanceReviewOptions> trialBalance,IOptions<LocalDatabaseBackupOptions> localBackup)
+        IOptions<ConfigurationBackupOptions> backups,IOptions<UploadUiOptions> uploadUi,IOptions<UploadStagingOptions> staging,IOptions<DataBankOptions> dataBank,IOptions<DataBankExportOptions> dataExports,IOptions<DataIntegrityOptions> integrity,IOptions<StorageCleanupOptions> cleanup,IOptions<TrialBalanceReviewOptions> trialBalance,IOptions<VerificationRuntimeOptions> verification,IOptions<LocalDatabaseBackupOptions> localBackup)
     {
         if (!options.Value.Enabled) { await next(context); return; }
         var path=context.Request.Path.Value ?? "/";
@@ -104,6 +104,8 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             }
         }
         context.Response.Headers.CacheControl="no-store";
+        if(html&&file=="verification.html"&&(!verification.Value.Enabled||!verification.Value.Valid()))
+        {context.Response.StatusCode=503;await context.Response.WriteAsync("Verification is unavailable.",context.RequestAborted);return;}
         if(html&&file=="trial_balance.html"&&!trialBalance.Value.UiEnabled)
         {context.Response.StatusCode=503;await context.Response.WriteAsync("Trial Balance review is unavailable.",context.RequestAborted);return;}
         context.Response.ContentType=extension switch { ".html"=>"text/html; charset=utf-8", ".js"=>"text/javascript; charset=utf-8",
@@ -136,7 +138,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
                 System.Text.RegularExpressions.RegexOptions.CultureInvariant);
             if(coordinator.Matches(content).Count!=1)
             {
-                // A future shared-markup change must not reactivate legacy upload calls.
+                // A future shared-markup change must not send uploads to another host.
                 context.Response.StatusCode=503;await context.Response.WriteAsync("The native Upload page requires integration review.",context.RequestAborted);return;
             }
             content=coordinator.Replace(content,"<script src=\"/static/api_utils.js\"></script><script src=\"/shell/upload_native.js\"></script>");

@@ -6,6 +6,49 @@ namespace AuditPlatform.Api.Tests;
 public sealed class VerificationMigrationCompatibilityTests(PostgresFixture fixture) : IClassFixture<PostgresFixture>
 {
     [Fact]
+    public async Task Account_control_assignment_migration_creates_client_scoped_routing_table()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var connection = new NpgsqlConnection(fixture.ConnectionString);
+        await connection.OpenAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var schema = "verification_migration_" + Guid.NewGuid().ToString("N");
+        await using (var setup = new NpgsqlCommand(
+            $"CREATE SCHEMA {schema}; CREATE TABLE {schema}.clients(id integer PRIMARY KEY)", connection, transaction))
+            await setup.ExecuteNonQueryAsync(ct);
+
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "AuditPlatform.slnx")))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        var migration = await File.ReadAllTextAsync(Path.Combine(directory.FullName, "database", "migrations",
+            "0027_verification_account_control_assignments.sql"), ct);
+        migration = migration.Replace("public.", schema + ".", StringComparison.Ordinal);
+        await using (var apply = new NpgsqlCommand(migration, connection, transaction))
+            await apply.ExecuteNonQueryAsync(ct);
+
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {schema}.clients VALUES (1);
+            INSERT INTO {schema}.account_control_assignments(client_id,account_code,verification_workstream)
+            VALUES (1,'010','cash')
+            """, connection, transaction))
+            await insert.ExecuteNonQueryAsync(ct);
+        await using var verify = new NpgsqlCommand($"""
+            SELECT a.verification_workstream,
+                   (SELECT count(*) FROM pg_constraint c
+                    WHERE c.conrelid='{schema}.account_control_assignments'::regclass AND c.contype='u'),
+                   (SELECT count(*) FROM pg_constraint c
+                    WHERE c.conrelid='{schema}.account_control_assignments'::regclass AND c.contype='f')
+            FROM {schema}.account_control_assignments a WHERE a.client_id=1 AND a.account_code='010'
+            """, connection, transaction);
+        await using var reader = await verify.ExecuteReaderAsync(ct);
+        Assert.True(await reader.ReadAsync(ct));
+        Assert.Equal("cash", reader.GetString(0));
+        Assert.Equal(1L, reader.GetInt64(1));
+        Assert.Equal(1L, reader.GetInt64(2));
+    }
+
+    [Fact]
     public async Task Evidence_indexes_preserve_legacy_upserts_and_separate_native_tenants()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -60,7 +60,7 @@ public sealed class UploadValidationPlanTests(ValidationPlanGoldenFixture golden
 
     private static UploadValidationPlanOptions Settings()=>new(){Enabled=true,SigningKey=Convert.ToBase64String(Enumerable.Range(0,32).Select(i=>(byte)i).ToArray())};
     [Fact]
-    public void SignaturesMatchPythonAndBindEveryEnvelopeField()
+    public void SignaturesMatchReferenceValuesAndBindEveryEnvelopeField()
     {
         var signer=new UploadValidationPlanSigner(Options.Create(Settings()));
         var envelope=JsonSerializer.Deserialize<ValidationPlanEnvelope>(golden.Oracle.RootElement.GetProperty("envelope"))!;

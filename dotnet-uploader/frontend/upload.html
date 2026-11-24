@@ -527,7 +527,7 @@
 
         /* ---------- RATE MODE BADGE (Phase D of the Rate-derivation requirement) ----------
            Informational-only indicator of the resolved Auto->Imported/Derived or Forced
-           Imported/Derived decision (routers/import_export.py's validate_only() response
+           Imported/Derived decision (Upload API's validate_only() response
            rate_mode field) -- shown in the Row Selection grid header and Excel Preview
            header once Validate succeeds (renderRateModeIndicator() in upload.js). Absent
            entirely for a template with no rate_source (rate_mode: null). Same small-pill
@@ -1283,7 +1283,7 @@
         }
 
         /* ---------- EXCEPTIONS LIST (Phase 3 of the row-level blank-field-rejection requirement) ----------
-           Rows rejected by the backend (routers/import_export.py's rejected_rows -- blank Document
+           Rows rejected by the backend (Upload API's rejected_rows -- blank Document
            ID/Amount/Date) get their own distinct panel here, separate from #rowExclusionContainer's
            checkbox grid -- deliberately NOT reusing .row-flagged/.row-validation-failed/.row-excluded,
            since a rejected-for-blank-critical-field row is its own category (dropped from import
@@ -1625,7 +1625,7 @@
 
                     <!-- Row Selection Grid (Phase 2 of row-exclusion): checkbox per row, paginated.
                          All rows are included by default -- unchecking a row excludes it from
-                         validate/import (routers/import_export.py's excluded_rows, Phase 1). -->
+                         validate/import (Upload API's excluded_rows, Phase 1). -->
                     <div id="rowExclusionContainer">
                         <div class="row-exclusion-header">
                             <span class="row-exclusion-title">☑️ Row Selection</span>

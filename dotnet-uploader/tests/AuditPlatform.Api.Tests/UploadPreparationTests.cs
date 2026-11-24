@@ -53,7 +53,7 @@ public sealed class UploadPreparationTests(PostgresFixture fixture,PreparationGo
         new(id,name,"col_"+id,type,"General",role,null,false,id-1,1,true);
 
     [Fact]
-    public void ExplicitDateChoicesMatchIsolatedPythonAndNativeCellsRemainNative()
+    public void ExplicitDateChoicesMatchReferenceInputsAndNativeCellsRemainNative()
     {
         foreach(var item in golden.Oracle.RootElement.GetProperty("dates").EnumerateArray())
         {
@@ -72,7 +72,7 @@ public sealed class UploadPreparationTests(PostgresFixture fixture,PreparationGo
     }
 
     [Fact]
-    public void HeaderPriorityAliasesAndFallbackMatchPythonWithoutGuessingAmbiguousNames()
+    public void HeaderPriorityAliasesAndFallbackMatchReferenceRulesWithoutGuessingAmbiguousNames()
     {
         foreach(var item in golden.Oracle.RootElement.GetProperty("mappings").EnumerateArray())
         {

@@ -11,7 +11,7 @@ using Xunit;
 namespace AuditPlatform.Api.Tests;
 
 // Every test run creates its own cluster. This fixture accepts a binary folder,
-// never a database URL, and never reads the Python app's settings or .env file.
+// never a database URL, and never reads settings from another app.
 public sealed class PostgresFixture : IAsyncLifetime
 {
     private readonly string marker = Guid.NewGuid().ToString("N");

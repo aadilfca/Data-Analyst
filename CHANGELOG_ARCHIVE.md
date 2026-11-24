@@ -1,5 +1,13 @@
 # Changelog Archive
 
+## C# Verification date selection — 2026-11-23
+
+Cash/Bank Verification now asks the C# API for the latest available date when no date range was saved, matching the existing vendor behavior. This avoids opening an empty current-day range when source data is older. Live Verification remains blocked until the C# schema migrations are applied and client accounts are assigned; no Supabase schema or data was changed.
+
+Verification's selected-client and session-start paths now create the initial C# rulebook snapshot through the established Audit Rules builder when no current snapshot exists. This avoids leaving Verification status unavailable after the snapshot tables are installed.
+
+Verification: API Release build passed with zero warnings or errors using a temporary output path. The normal output path was locked by the running app, so its backend DLL was not replaced; the running C# server did return the updated `verification.js` with HTTP 200. No live database change or commit occurred.
+
 ## C# local report and Verification acceptance — 2026-11-22
 
 Expanded local C# acceptance coverage for Cashflows reversals/transfers and net/gross receipts, independent-ledger reconciliation, workbook order/styles/text/size limits, report-job lease recovery/expiry/revocation/concurrent claims, and Verification's default-off and tenant-scoped runtime. The Release test project build passed with zero warnings or errors; the five focused test classes passed 15/15 using disposable local PostgreSQL. No production code, feature switches, migrations, Supabase data, Render resources, or Python rollback files changed.
@@ -10541,6 +10549,10 @@ Aadil clarified that the deliverable is a standalone C# app, not a Python-backed
 
 With Python-related `PATH` entries removed, the full Release solution built using the repository-local SDK with zero warnings/errors. Static scans found no Python executable/path dependency in C# source, tools or test code and no C# frontend prompts directing users to the Python app. The Dockerfile copies only the API source and `frontend`; the historical Python oracle scripts are not copied or invoked by C# tests. A local API process returned 200 for `/healthz` and the packaged public login page, then shut down cleanly. PostgreSQL stayed disabled and no user/database data was read. The first shell probe used incomplete temporary flags and hit expected startup validation; the corrected probe supplied the required shell/auth/user/client flags. No production configuration was edited. Phase 8 section review is next; Phase 6B broader acceptance issues and Aadil's local review remain open, so no commit is authorized.
 
-## C# Phase 8 Dashboard review — 2026-11-23
+## C# Phase 8 frontend review — 2026-11-23
 
-Read-only review of `frontend/index.html` and `script.js` found active cards route to packaged C# pages; dashboard stats use `/api/dashboard/*` and Data Integrity uses `/api/data-integrity/overview`. Analysis and Audit Log are intentionally Coming Soon. Aadil's screenshot showed the shared `Retrying...` toast, which indicates a dashboard GET was retried; observe whether it persists. No Dashboard source was changed. The broader worktree still contains unaccepted Phase 6B changes, so no commit was made.
+Static review covered all 25 packaged HTML pages and local asset references. The only unmatched reference is `upload.js`, which the C# middleware replaces with its native upload script and stylesheet. Docker packages the API and `frontend/` only. No Python runtime/file dependency, Python-app URL, or Google Drive link was found in the frontend; some C# comments still cite legacy Python files for behavior comparisons, without loading or executing them. The Trial Balance unavailable page remains a deferred bug. Port 5080 refused connections, so authenticated browser walkthroughs remain pending. No code changed in this review.
+
+## C# Verification cashbook schema repair — 2026-11-23
+
+The restarted C# app reached Supabase, but cashbook and Verification stats requests failed with PostgreSQL `42P01`. Logs identified missing `public.account_control_assignments` and `public.platform_audit_rule_snapshots`; no `platform_audit_rule_*` objects were present. Supabase migration history lists only `0010`, `0024`, and `0026`, confirming `0021` is not recorded. Added migration `0027` for client-scoped account/workstream assignments, a compatibility test, and a repeatable least-privilege grants script for assignment maintenance and read-only rule snapshots. The test-project Release build passed with zero warnings/errors. The focused fixture could not start because Windows `initdb` failed to create a restricted token in this environment. As a substitute, migrations `0021` and `0027` plus the grants were applied to a fresh disposable Docker PostgreSQL instance; grants passed twice and the restricted role successfully inserted/read assignments and read snapshots. Existing migration `0021` explicitly requires an ownership, capacity, and rollback review before shared-database use. No live schema or data was changed; approved database rollout remains pending. All artifacts are C#-owned with no Python runtime or source dependency.

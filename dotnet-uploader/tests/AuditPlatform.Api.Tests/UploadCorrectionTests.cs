@@ -67,7 +67,7 @@ public sealed class UploadCorrectionTests(CorrectionGoldenFixture golden) : ICla
     }
 
     [Fact]
-    public void PythonCorrectionVectorsPreserveCountsIdsFieldsAndOccurrenceMultiplicity()
+    public void ReferenceCorrectionVectorsPreserveCountsIdsFieldsAndOccurrenceMultiplicity()
     {
         foreach(var vector in golden.Oracle.RootElement.GetProperty("vectors").EnumerateArray())
         {

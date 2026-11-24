@@ -327,7 +327,7 @@ function getVoucherTickSaveState() {
         }
     });
     // Keys here must match the snake_case Body(embed=True) param names on
-    // save_and_verify_voucher_bundle exactly — FastAPI binds embedded Body params by exact JSON
+    // save_and_verify_voucher_bundle exactly — the API binds embedded request fields by exact JSON
     // key, so a camelCase key here silently falls through to that param's None default instead
     // of erroring, which is what caused the endpoint's unconditional 400 on verify (root-caused
     // 2026-08-28: voucher_checks always arrived empty, so every active check read as untouched).
@@ -725,7 +725,7 @@ async function fetchProcedureRows(templateId, documentId, search, page, limit) {
 // label as "{voucherId} [{lineSrno}]" so the specific line an assignment belongs to is visibly
 // verifiable, not just the voucher as a whole. Falls back to the bare voucherId when lineSrno is
 // missing (mirrors the backend's own None-on-lookup-failure fallback in _resolve_line_srno(),
-// routers/verification.py) — a rare defensive case, not the expected common path. Shared by both
+// Verification API) — a rare defensive case, not the expected common path. Shared by both
 // buildProcedureResultRowHtml() and buildProcedureBrowseTableHtml() so the two surfaces can never
 // disagree on this label's format.
 function formatAssignedVoucherLabel(voucherId, lineSrno) {
@@ -742,7 +742,7 @@ function formatAssignedVoucherLabel(voucherId, lineSrno) {
 // line would wrongly show as "assigned to a different voucher" even though it's the exact same
 // line). Compares by the stable client_data_id of the voucher's own line instead — looked up for
 // "uid" via hostAdapter.currentVoucherLines (already loaded for the current voucher), against the new
-// assigned_to_line_client_data_id field routers/data.py's attach_assignment_flags() now returns.
+// assigned_to_line_client_data_id field Data Bank API's attach_assignment_flags() now returns.
 function isSameUnderlyingLine(uid, row) {
     if (!row.is_assigned) return false;
     const currentLine = hostAdapter.currentVoucherLines.find(l => String(l.detail_id) === String(uid));
@@ -2144,7 +2144,7 @@ async function verifyAndStay() {
 
 // Shared "are all currently-active voucher-level checks marked done" check — used by any real
 // Document flagged transaction_level_approval, whose tab additionally requires this. Mirrors
-// compute_and_persist_cleared_status()'s own voucher-checks gate (routers/verification.py),
+// compute_and_persist_cleared_status()'s own voucher-checks gate (Verification API),
 // which requires state='done' for every active check — a 'not_done' check does NOT satisfy this,
 // even though it counts as "touched" for the Verify button's own, separate gate below.
 function isVoucherChecksComplete(checks) {
@@ -4592,7 +4592,7 @@ const PB_ICON_PLUS = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height
 const PB_ICON_REMOVE = '<svg class="pb-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
 const PB_ICON_COPY = '<svg class="pb-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
 
-// Float-safety epsilon matching CROSS_CHECK_FLOAT_EPSILON (routers/verification.py) — used both
+// Float-safety epsilon matching CROSS_CHECK_FLOAT_EPSILON (Verification API) — used both
 // for the grand-total-vs-voucher-amount reconciliation pill and the completion-dot gate below, so
 // neither can ever disagree with the backend's own _cross_check_values_equal()/
 // _evaluate_physical_bill_completion() epsilon.
@@ -4667,7 +4667,7 @@ function computePhysicalBillGrandTotal(bills) {
     return (bills || []).reduce((sum, bill) => sum + computePhysicalBillSubtotal(bill), 0);
 }
 
-// Client-side mirror of _evaluate_physical_bill_completion() (routers/verification.py) — every
+// Client-side mirror of _evaluate_physical_bill_completion() (Verification API) — every
 // bill needs non-blank bill_no/bill_date/vendor_name and at least one item; every item's Qty*Rate
 // must resolve to a number; the grand total across every bill/item must equal the voucher line's
 // own amount within PB_FLOAT_EPSILON. No partial credit — one incomplete bill or item, or a
@@ -4824,7 +4824,7 @@ function renderPhysicalBillCard(bill, billIdx) {
 // ---------- COPY FROM LINES (Phase 5 of 6 — rebuilt against the nested bills[].items[] shape) ----------
 // Resolves a Document's own template to a Physical Bill "source type" ('grn'/'vendor_bill') purely
 // from templateNameCache, same case-insensitive match resolve_physical_bill_fields_from_source()
-// (routers/verification.py) uses via its own PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES — reused here only
+// (Verification API) uses via its own PHYSICAL_BILL_SOURCE_TEMPLATE_NAMES — reused here only
 // to find eligible source rows, no server call made.
 function resolvePhysicalBillSourceType(templateId) {
     const templateName = (templateNameCache[templateId] || '').trim().toLowerCase();
@@ -5724,7 +5724,7 @@ function buildSelectedLinesTable(uid, docId) {
         html += '</tr>';
     });
 
-    // Totals row: sums only columns whose data_type is Numeric (mirrors routers/data.py's own
+    // Totals row: sums only columns whose data_type is Numeric (mirrors Data Bank API's own
     // amount_columns convention) — every other cell, including Sr No and the trailing unlink
     // column, is left blank. Recomputes automatically on every re-render of this table (add/
     // remove a line), since this function is the single place the Linked Evidence table is built.
@@ -5968,7 +5968,7 @@ function buildObservationSection(uid, docId) {
 // by flushProcedureObservations() below, never directly from a UI event — there is no Save button
 // anymore. Always marks it unsynced server-side — it will be rolled into the voucher line's own
 // Observation field the next time that line is saved (hostAdapter.saveLineItems(), via
-// sync_line_observations_to_voucher() in routers/verification.py), and also immediately here since
+// sync_line_observations_to_voucher() in Verification API), and also immediately here since
 // save_line_observation() itself calls that same sync function.
 async function saveLineObservation(uid, docId, target = null) {
     const tabState = getProcedureTabState(uid, docId);
@@ -6243,7 +6243,7 @@ function buildProcedureBrowseTableHtml(uid, rows, activeDocId) {
     // (already-warmed templateColumnsCache, same source buildSelectedLinesTable() uses)
     // instead of the first row's own row_data key order, which isn't reliable for a
     // derived field like Rate (see reorder_row_data_by_template()'s docstring, routers/
-    // import_export.py). Falls back to the union-of-keys behavior if the cache has
+    // Upload API). Falls back to the union-of-keys behavior if the cache has
     // nothing for this template.
     const lineState = hostAdapter.procedureModalState[uid];
     const activeDoc = lineState && (lineState.documents || []).find(d => d.id === activeDocId);

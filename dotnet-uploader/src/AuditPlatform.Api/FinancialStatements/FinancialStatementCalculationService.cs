@@ -185,7 +185,7 @@ internal sealed class FinancialStatementCalculationService
         };
         var ordered=new List<IReadOnlyList<SortedDictionary<string,object?>>>(groups.Count);
         foreach(var group in groups)
-            ordered.Add(group.OrderBy(row=>PythonJson(row),StringComparer.Ordinal).ToArray());
+            ordered.Add(group.OrderBy(row=>CanonicalJson(row),StringComparer.Ordinal).ToArray());
         var payload=new List<object?>
         {
             ordered[0],ordered[1],ordered[2],ordered[3],ordered[4],
@@ -193,7 +193,7 @@ internal sealed class FinancialStatementCalculationService
                 : Object(("source_calculation_id",(object?)profitLink.SourceCalculationId),
                     ("target_category_id",profitLink.TargetCategoryId))
         };
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(PythonJson(payload)))).ToLowerInvariant();
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(CanonicalJson(payload)))).ToLowerInvariant();
     }
 
     private static SortedDictionary<string,object?> Object(params (string Key,object? Value)[] values)
@@ -206,11 +206,11 @@ internal sealed class FinancialStatementCalculationService
     private sealed record RawJsonNumber(string Value);
     private static object? RawAmount(ReportAmountValue? value)
         =>value is null?null:new RawJsonNumber(value.StorageType=="real"
-            ?PythonFloat(value.RawValue):value.RawValue);
+            ?FormatStoredNumber(value.RawValue):value.RawValue);
 
-    // The legacy fingerprint receives psycopg float values, so even integral
-    // REAL values serialize as Python floats (for example, 1.0 rather than 1).
-    private static string PythonFloat(string token)
+    // Stored fingerprints use floating-point values, including integral REAL values
+    // such as 1.0 rather than 1.
+    private static string FormatStoredNumber(string token)
     {
         double value=double.Parse(token,NumberStyles.Float,CultureInfo.InvariantCulture);
         if(!double.IsFinite(value))throw new FormatException("Non-finite report amount.");
@@ -241,37 +241,37 @@ internal sealed class FinancialStatementCalculationService
         return sign+fixedValue;
     }
 
-    private static string PythonJson(object? value)
+    private static string CanonicalJson(object? value)
     {
-        var output=new StringBuilder();WritePythonJson(output,value);return output.ToString();
+        var output=new StringBuilder();WriteCanonicalJson(output,value);return output.ToString();
     }
 
-    private static void WritePythonJson(StringBuilder output,object? value)
+    private static void WriteCanonicalJson(StringBuilder output,object? value)
     {
         switch(value)
         {
             case null: output.Append("null");break;
             case RawJsonNumber number:
                 _=Amount.Parse(number.Value);output.Append(number.Value);break;
-            case string text: AppendPythonString(output,text);break;
+            case string text: AppendCanonicalString(output,text);break;
             case bool boolean: output.Append(boolean?"true":"false");break;
             case int integer: output.Append(integer.ToString(CultureInfo.InvariantCulture));break;
             case long longInteger: output.Append(longInteger.ToString(CultureInfo.InvariantCulture));break;
             case SortedDictionary<string,object?> map:
                 output.Append('{');bool first=true;
                 foreach(var pair in map)
-                {if(!first)output.Append(',');first=false;AppendPythonString(output,pair.Key);output.Append(':');WritePythonJson(output,pair.Value);}
+                {if(!first)output.Append(',');first=false;AppendCanonicalString(output,pair.Key);output.Append(':');WriteCanonicalJson(output,pair.Value);}
                 output.Append('}');break;
             case System.Collections.IEnumerable sequence when value is not string:
                 output.Append('[');bool firstItem=true;
                 foreach(var item in sequence)
-                {if(!firstItem)output.Append(',');firstItem=false;WritePythonJson(output,item);}
+                {if(!firstItem)output.Append(',');firstItem=false;WriteCanonicalJson(output,item);}
                 output.Append(']');break;
             default: throw new InvalidOperationException("Unsupported value in Financial Statement context identity.");
         }
     }
 
-    private static void AppendPythonString(StringBuilder output,string value)
+    private static void AppendCanonicalString(StringBuilder output,string value)
     {
         output.Append('"');
         foreach(char ch in value)

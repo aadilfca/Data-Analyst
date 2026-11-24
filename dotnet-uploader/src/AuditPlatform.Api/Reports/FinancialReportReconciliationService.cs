@@ -508,7 +508,7 @@ internal sealed class FinancialReportReconciliationService
             Dictionary<string,Dictionary<string,UploadExactAmount>> Periods,HashSet<(string,string)> Members)>(StringComparer.Ordinal);
         foreach(var row in rows)
         {
-            string payload="["+PythonString(row.TreasuryView)+", "+PythonString(row.Reason)+", "+PythonString(row.Label)+", "+PythonString(row.Category)+"]";
+            string payload="["+QuoteStableString(row.TreasuryView)+", "+QuoteStableString(row.Reason)+", "+QuoteStableString(row.Label)+", "+QuoteStableString(row.Category)+"]";
             string key=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant()[..24];
             if(!groups.TryGetValue(key,out var group))group=(row.Reason,row.Label,row.Category,new(StringComparer.Ordinal),new());
             if(!group.Periods.TryGetValue(row.PeriodKey,out var totals))group.Periods[row.PeriodKey]=totals=new(StringComparer.Ordinal)
@@ -613,7 +613,7 @@ internal sealed class FinancialReportReconciliationService
     private static UploadExactAmount NegativeAsPositive(UploadExactAmount value)=>value.CompareTo(UploadExactAmount.Zero)<0?UploadExactAmount.Zero-value:UploadExactAmount.Zero;
     internal static string AdjustmentKey(FinancialReportPresentationAdjustment row)
     {
-        string payload="["+PythonString(row.TreasuryView)+", "+PythonString(row.Reason)+", "+PythonString(row.Label)+", "+PythonString(row.Category)+"]";
+        string payload="["+QuoteStableString(row.TreasuryView)+", "+QuoteStableString(row.Reason)+", "+QuoteStableString(row.Label)+", "+QuoteStableString(row.Category)+"]";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant()[..24];
     }
     private static double? LegacyNumber(UploadExactAmount? amount)
@@ -767,21 +767,21 @@ internal sealed class FinancialReportReconciliationService
         try
         {
             using var roles=JsonDocument.Parse(upload.LedgerColumnsJson??"{}");using var columns=JsonDocument.Parse(upload.TemplateColumnsJson);
-            string payload="["+PythonJson(roles.RootElement)+", "+PythonJson(columns.RootElement)+"]";
+            string payload="["+CanonicalJson(roles.RootElement)+", "+CanonicalJson(columns.RootElement)+"]";
             string actual=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
             return StringComparer.OrdinalIgnoreCase.Equals(actual,expected);
         }
         catch(JsonException){return false;}
     }
 
-    private static string PythonJson(JsonElement value) => value.ValueKind switch
+    private static string CanonicalJson(JsonElement value) => value.ValueKind switch
     {
-        JsonValueKind.Object=>"{"+string.Join(", ",value.EnumerateObject().OrderBy(p=>p.Name,StringComparer.Ordinal).Select(p=>PythonString(p.Name)+": "+PythonJson(p.Value)))+"}",
-        JsonValueKind.Array=>"["+string.Join(", ",value.EnumerateArray().Select(PythonJson))+"]",
-        JsonValueKind.String=>PythonString(value.GetString()??""),JsonValueKind.Number=>value.GetRawText(),
+        JsonValueKind.Object=>"{"+string.Join(", ",value.EnumerateObject().OrderBy(p=>p.Name,StringComparer.Ordinal).Select(p=>QuoteStableString(p.Name)+": "+CanonicalJson(p.Value)))+"}",
+        JsonValueKind.Array=>"["+string.Join(", ",value.EnumerateArray().Select(CanonicalJson))+"]",
+        JsonValueKind.String=>QuoteStableString(value.GetString()??""),JsonValueKind.Number=>value.GetRawText(),
         JsonValueKind.True=>"true",JsonValueKind.False=>"false",_=>"null"
     };
-    private static string PythonString(string value)
+    private static string QuoteStableString(string value)
     {
         var output=new StringBuilder("\"");foreach(char c in value)
         {if(c=='"')output.Append("\\\"");else if(c=='\\')output.Append("\\\\");else if(c=='\b')output.Append("\\b");else if(c=='\f')output.Append("\\f");else if(c=='\n')output.Append("\\n");else if(c=='\r')output.Append("\\r");else if(c=='\t')output.Append("\\t");else if(c<0x20||c>0x7e)output.Append("\\u").Append(((int)c).ToString("x4",CultureInfo.InvariantCulture));else output.Append(c);}output.Append('"');return output.ToString();

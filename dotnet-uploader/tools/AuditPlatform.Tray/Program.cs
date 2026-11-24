@@ -102,6 +102,10 @@ internal sealed class TrayApplication : ApplicationContext
             start.ArgumentList.Add(apiPath);
             start.ArgumentList.Add("--urls");
             start.ArgumentList.Add(BaseUri.ToString().TrimEnd('/'));
+            start.Environment["AuditRules__Enabled"] =
+                Environment.GetEnvironmentVariable("AuditRules__Enabled") ?? "true";
+            start.Environment["VerificationRuntime__Enabled"] =
+                Environment.GetEnvironmentVariable("VerificationRuntime__Enabled") ?? "true";
             start.Environment["ASPNETCORE_ENVIRONMENT"] = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
             start.Environment["AUDIT_PLATFORM_TRAY_LOG"] = Path.Combine(Path.GetTempPath(), "audit-platform-csharp.log");
             var logPath = start.Environment["AUDIT_PLATFORM_TRAY_LOG"]!;

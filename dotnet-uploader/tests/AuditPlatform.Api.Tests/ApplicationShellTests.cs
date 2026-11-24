@@ -113,6 +113,7 @@ public sealed class ApplicationShellTests(PostgresFixture fixture) : IClassFixtu
                 services.PostConfigure<UserManagementOptions>(o=>o.Enabled=true);
                 services.PostConfigure<ClientManagementOptions>(o=>o.Enabled=true);
                 services.PostConfigure<ApplicationShellOptions>(o=>o.Enabled=true);
+                services.PostConfigure<VerificationRuntimeOptions>(o=>o.Enabled=false);
             });
         });
         app.UseKestrel(server=>server.Listen(IPAddress.Loopback,0));
@@ -130,6 +131,10 @@ public sealed class ApplicationShellTests(PostgresFixture fixture) : IClassFixtu
         Assert.Equal(HttpStatusCode.Conflict,(await http.GetAsync("/api/users",Token)).StatusCode);
         http.DefaultRequestHeaders.Remove("X-App-Context");
         http.DefaultRequestHeaders.Add("X-App-Context",TenantSessionService.ContextKey(inB));
+        await Sql("UPDATE public.sessions SET selected_client_id=20 WHERE token=repeat('a',64)");
+        var verificationUnavailable=await http.GetAsync("/static/verification.html",Token);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,verificationUnavailable.StatusCode);
+        Assert.Equal("Verification is unavailable.",await verificationUnavailable.Content.ReadAsStringAsync(Token));
         Assert.Equal(HttpStatusCode.OK,(await http.GetAsync("/api/clients",Token)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden,(await http.GetAsync("/api/users",Token)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden,(await http.GetAsync("/static/users.html",Token)).StatusCode);

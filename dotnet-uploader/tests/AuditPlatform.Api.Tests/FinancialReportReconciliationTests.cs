@@ -1,6 +1,8 @@
 using AuditPlatform.Api.Cashflows;
+using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.FinancialStatements;
 using AuditPlatform.Api.Reports;
+using AuditPlatform.Api.Workbooks;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -79,6 +81,28 @@ public sealed class FinancialReportReconciliationTests
         Assert.Equal("100", period.LedgerMovement);
         Assert.Equal("1100", period.LedgerClosing);
         Assert.Equal(expectedStatus == "Matched" ? "0" : "10", period.Difference);
+
+        var sheets = FinancialReportWorkbookWriter.CashflowSheets(cashflows, result,
+            includeReconciliation: true, snapshot: snapshot);
+        var proof = Assert.Single(sheets, sheet => sheet.Name == "Reconciliation Proof");
+        Assert.Contains(proof.Rows, row => row.Contains("Overall status") && row.Contains(expectedStatus));
+        Assert.Contains(proof.Rows, row => row.Contains("V1") && row.Contains(expectedPostingStatus));
+        Assert.Contains(sheets, sheet => sheet.Name == "Reconciliation Evidence");
+
+        byte[] workbook = FinancialReportWorkbookWriter.Write(sheets, new ReportInputOptions(),
+            TestContext.Current.CancellationToken);
+        string path = Path.Combine(Path.GetTempPath(), "reconciliation-built-" + Guid.NewGuid().ToString("N") + ".xlsx");
+        try
+        {
+            File.WriteAllBytes(path, workbook);
+            var exportedProof = WorkbookReader.Read(path, ".xlsx", "Reconciliation Proof",
+                ct: TestContext.Current.CancellationToken).ToArray();
+            var exportedText = exportedProof.SelectMany(row => row.Cells).Select(cell => cell.Text).ToArray();
+            Assert.Contains(expectedStatus, exportedText);
+            Assert.Contains("V1", exportedText);
+            Assert.Contains(expectedPostingStatus, exportedText);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
     }
 
     private static ReportInputSnapshot Snapshot() => new(

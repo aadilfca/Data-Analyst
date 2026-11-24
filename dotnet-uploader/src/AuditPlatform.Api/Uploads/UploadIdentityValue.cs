@@ -7,7 +7,7 @@ using AuditPlatform.Api.Workbooks;
 
 namespace AuditPlatform.Api.Uploads;
 
-// Comparison-only views. Python-compatible identity serialization is separate
+// Comparison-only views use stable identity serialization separate
 // from JSONB/raw guards; no source amount is rounded or converted to decimal.
 public static class UploadIdentityValue
 {
@@ -40,7 +40,7 @@ public static class UploadIdentityValue
     private sealed record Number(string Digits,int Power,bool Negative)
     {
         public string Equality=>Digits=="0"?"0":(Negative?"-":"")+Digits+"e"+Power.ToString(CultureInfo.InvariantCulture);
-        public string PythonNormalized()
+        public string Normalized()
         {
             // normalize() in the existing identity helper can round under its
             // Decimal context. Review such cases; never hash narrowed digits.
@@ -86,7 +86,7 @@ public static class UploadIdentityValue
     public static string RawComparison(IdentityAtom value)=>FalseLike(value)?"":Raw(value);
     private static bool FalseLike(IdentityAtom value)=>Blank(value)||value.Kind=="boolean"&&value.Text=="False"
         ||value.Kind=="number"&&Numeric(value).Digits=="0";
-    private static int PythonOrder(string left,string right)
+    private static int CompareCanonicalKeys(string left,string right)
     {
         var a=left.EnumerateRunes().GetEnumerator();var b=right.EnumerateRunes().GetEnumerator();
         while(true) {bool x=a.MoveNext(),y=b.MoveNext();if(!x||!y) return x.CompareTo(y);int compared=a.Current.Value.CompareTo(b.Current.Value);if(compared!=0) return compared;}
@@ -143,23 +143,23 @@ public static class UploadIdentityValue
         {
             var value=row.GetValueOrDefault(column.Key,new("blank"));
             values[column.Key]=Blank(value)?new object?[]{"numeric_blank"}:LegacyNumeric(value) is {} number
-                ?new object?[]{"numeric",number.PythonNormalized()}:new object?[]{"invalid_numeric",Raw(value)};
+                ?new object?[]{"numeric",number.Normalized()}:new object?[]{"invalid_numeric",Raw(value)};
         }
         var fields=values.AsEnumerable();
         if(includedOnly) {var included=profile.Columns.Where(c=>c.Compare).Select(c=>c.Key).ToHashSet(StringComparer.Ordinal);fields=fields.Where(v=>included.Contains(v.Key));}
-        return Json(fields.OrderBy(v=>v.Key,Comparer<string>.Create(PythonOrder)).Select(v=>(object?)new object?[]{v.Key,v.Value}));
+        return Json(fields.OrderBy(v=>v.Key,Comparer<string>.Create(CompareCanonicalKeys)).Select(v=>(object?)new object?[]{v.Key,v.Value}));
     }
     public static string Fingerprint(IdentityProfile profile,IReadOnlyDictionary<string,IdentityAtom> row,string? primary,
         string delimiter,string order,bool stored=false,bool equivalent=false)
     {
         var values=ComparisonValues(profile,row,primary,delimiter,order,stored,equivalent);
-        object? fields=values.OrderBy(v=>v.Key,Comparer<string>.Create(PythonOrder)).Select(v=>(object?)new object?[]{v.Key,v.Value});
+        object? fields=values.OrderBy(v=>v.Key,Comparer<string>.Create(CompareCanonicalKeys)).Select(v=>(object?)new object?[]{v.Key,v.Value});
         return Json(equivalent?fields:new object?[]{fields,primary});
     }
     public static IReadOnlyDictionary<string,string> ComparedFields(IdentityProfile profile,IReadOnlyDictionary<string,IdentityAtom> row,
         string? primary,string delimiter,string order,bool stored=false)=>ComparisonValues(profile,row,primary,delimiter,order,stored,true)
             .ToDictionary(v=>v.Key,v=>Json(v.Value),StringComparer.Ordinal);
-    public static string FieldKey(IEnumerable<KeyValuePair<string,string>> fields)=>Json(fields.OrderBy(v=>v.Key,Comparer<string>.Create(PythonOrder))
+    public static string FieldKey(IEnumerable<KeyValuePair<string,string>> fields)=>Json(fields.OrderBy(v=>v.Key,Comparer<string>.Create(CompareCanonicalKeys))
         .Select(v=>(object?)new object?[]{v.Key,v.Value}));
     public static bool Movement(IdentityAtom value)
     {
