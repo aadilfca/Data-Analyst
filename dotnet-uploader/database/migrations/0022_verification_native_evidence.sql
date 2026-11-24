@@ -1,5 +1,5 @@
 -- Candidate only. Apply only in the reviewed deployment migration sequence.
--- Legacy Python rows keep their ID namespace in rulebook_source='legacy'; native rows use
+-- Pre-existing Rulebook rows retain their source-ID namespace in rulebook_source='legacy'; native rows use
 -- 'native'. Tenant ownership is backfilled where possible; JSON entity IDs stay app-validated.
 
 ALTER TABLE public.voucher_line_documents
@@ -51,7 +51,7 @@ UPDATE public.voucher_check_status x SET tenant_id=h.tenant_id
 FROM public.platform_tenant_client_homes h
 WHERE x.client_id=h.client_id AND x.tenant_id IS NULL;
 
--- Native Rulebook definitions are JSON entities, not rows in Python's legacy tables.
+-- Native Rulebook definitions are tenant-owned JSON entities, not rows in the pre-existing Rulebook tables.
 -- Remove only the legacy-definition foreign keys; keep line, source-row and tenant ownership.
 ALTER TABLE public.voucher_line_documents
     DROP CONSTRAINT IF EXISTS voucher_line_documents_document_id_fkey;
@@ -68,10 +68,10 @@ ALTER TABLE public.voucher_line_form_values
 ALTER TABLE public.voucher_check_status
     DROP CONSTRAINT IF EXISTS voucher_check_status_check_id_fkey;
 
--- Preserve the old uniqueness boundary for legacy records and give native rows
--- tenant-qualified identity. Deploy the compatible Python conflict predicates
--- and restart its process before any legacy rollback; old SQL cannot infer these
--- partial indexes. Mixed-backend read/write compatibility needs separate proof.
+-- Preserve the existing uniqueness boundary for pre-existing records and give native rows
+-- tenant-qualified identity. Any rollback to an older writer requires separate verification
+-- that it uses conflict targets compatible with these partial indexes. Mixed-version read/write
+-- compatibility needs separate proof.
 -- PostgreSQL shortens generated constraint names by truncating individual name
 -- components, so resolve this exact column set instead of guessing its name.
 DO $$ DECLARE old_unique RECORD; BEGIN
@@ -118,9 +118,9 @@ CREATE INDEX IF NOT EXISTS voucher_line_physical_bills_tenant_line_document
 CREATE INDEX IF NOT EXISTS voucher_check_status_tenant_client_ref
     ON public.voucher_check_status(tenant_id,client_id,transaction_ref);
 
-COMMENT ON COLUMN public.voucher_line_documents.rulebook_source IS 'legacy preserves Python Rulebook identity; native uses tenant-owned P41 JSON entity IDs.';
-COMMENT ON COLUMN public.voucher_line_procedure_checks.rulebook_source IS 'legacy preserves Python Rulebook identity; native uses tenant-owned P41 JSON entity IDs.';
-COMMENT ON COLUMN public.voucher_line_observations.rulebook_source IS 'legacy preserves Python Rulebook identity; native uses tenant-owned P41 JSON entity IDs.';
-COMMENT ON COLUMN public.voucher_line_form_entries.rulebook_source IS 'legacy preserves Python Rulebook identity; native uses tenant-owned P41 Document and Form-field IDs.';
-COMMENT ON COLUMN public.voucher_line_physical_bills.rulebook_source IS 'legacy preserves Python Rulebook identity; native uses tenant-owned P41 Document IDs.';
-COMMENT ON COLUMN public.voucher_check_status.rulebook_source IS 'legacy preserves Python Rulebook identity; native uses tenant-owned P41 Voucher Check IDs.';
+COMMENT ON COLUMN public.voucher_line_documents.rulebook_source IS 'legacy preserves pre-existing Rulebook identity; native uses tenant-owned P41 JSON entity IDs.';
+COMMENT ON COLUMN public.voucher_line_procedure_checks.rulebook_source IS 'legacy preserves pre-existing Rulebook identity; native uses tenant-owned P41 JSON entity IDs.';
+COMMENT ON COLUMN public.voucher_line_observations.rulebook_source IS 'legacy preserves pre-existing Rulebook identity; native uses tenant-owned P41 JSON entity IDs.';
+COMMENT ON COLUMN public.voucher_line_form_entries.rulebook_source IS 'legacy preserves pre-existing Rulebook identity; native uses tenant-owned P41 Document and Form-field IDs.';
+COMMENT ON COLUMN public.voucher_line_physical_bills.rulebook_source IS 'legacy preserves pre-existing Rulebook identity; native uses tenant-owned P41 Document IDs.';
+COMMENT ON COLUMN public.voucher_check_status.rulebook_source IS 'legacy preserves pre-existing Rulebook identity; native uses tenant-owned P41 Voucher Check IDs.';

@@ -1,7 +1,7 @@
 -- Review-only empty base schema for the C# migrations 0001-0025.
 -- Run only after the permissions plan is approved. This file creates no roles,
 -- grants, seed rows, clients, uploads, or transaction data, and applies no C# migrations.
--- Definitions are based on the PostgreSQL branch of database.py:init_db_postgres.
+-- Definitions capture the existing PostgreSQL schema used for isolated C# migration rehearsals.
 
 BEGIN;
 

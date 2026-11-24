@@ -1,6 +1,6 @@
 -- Candidate for an isolated rehearsal only. Never apply at app startup or to a
 -- shared database without the approved ownership, capacity and rollback review.
--- Python Audit Rules tables remain unchanged during coexistence.
+-- Pre-existing Audit Rules tables are left unchanged by this candidate migration.
 CREATE SEQUENCE public.platform_audit_rule_form_field_id_seq;
 
 CREATE TABLE public.platform_audit_rule_state (
