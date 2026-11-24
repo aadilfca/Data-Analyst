@@ -11,11 +11,12 @@ namespace AuditPlatform.Api.Authentication;
 
 public sealed record VerifiedSession(string Token, int UserId, string Username, string? Role,
     DateTime Expiry, int? ClientId, string? ClientName, string? ClientCode,
-    bool TenantContextRequired = false, int? TenantId = null, long ContextVersion = 0);
+    bool TenantContextRequired = false, int? TenantId = null, long ContextVersion = 0,
+    string? TenantRole = null, bool TenantMembershipValid = false);
 
 public sealed class PostgresSessionStore(PostgresTransactions transactions, PostgresAuditWriter audit,
     IOptions<ApplicationShellOptions>? shell = null, ILogger<PostgresSessionStore>? logger = null,
-    IHostEnvironment? environment = null)
+    IHostEnvironment? environment = null, PostgresSingleStatementRead? singleReads = null)
 {
     public Task<bool> IsExpiredAsync(string token, CancellationToken cancellationToken) =>
         transactions.ExecuteAsync(async (db, ct) =>
@@ -28,15 +29,22 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
             return (bool)(await command.ExecuteScalarAsync(ct))!;
         }, cancellationToken);
 
-    public Task<VerifiedSession?> FindAsync(string token, CancellationToken cancellationToken) =>
-        transactions.ExecuteAsync(async (db, ct) =>
+    public Task<VerifiedSession?> FindAsync(string token, CancellationToken cancellationToken) => singleReads is null
+        ? transactions.ExecuteAsync((db, ct) => FindAsync(db.CreateCommand, token, ct), cancellationToken)
+        : singleReads.ExecuteAsync("session_lookup", (db, ct) => FindAsync(db.CreateCommand, token, ct), cancellationToken);
+
+    private Task<VerifiedSession?> FindAsync(Func<string, NpgsqlCommand> createCommand, string token, CancellationToken ct) =>
+        FindCoreAsync(createCommand, token, ct);
+
+    private async Task<VerifiedSession?> FindCoreAsync(Func<string, NpgsqlCommand> createCommand, string token, CancellationToken ct)
         {
             var scoped = shell?.Value.Enabled == true;
-            await using var command = db.CreateCommand($"""
+            await using var command = createCommand($"""
                 SELECT s.user_id,u.username,u.role,s.expiry,s.selected_client_id,c.client_name,c.client_code
-                    {(scoped ? ",s.selected_tenant_id,s.context_version" : "")}
+                    {(scoped ? ",s.selected_tenant_id,s.context_version,m.tenant_role,(m.is_active IS TRUE AND t.is_active IS TRUE)" : "")}
                 FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 LEFT JOIN public.clients c ON c.id=s.selected_client_id
+                {(scoped ? "LEFT JOIN public.platform_tenant_memberships m ON m.user_id=s.user_id AND m.tenant_id=s.selected_tenant_id LEFT JOIN public.platform_tenants t ON t.id=s.selected_tenant_id" : "")}
                 WHERE s.token=$1 AND s.expiry > now() AND u.is_active IS TRUE
                 """);
             command.Parameters.AddWithValue(token);
@@ -50,7 +58,9 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
                     reader.IsDBNull(5) ? null : reader.GetInt32(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
                     reader.IsDBNull(6) ? null : reader.GetString(6), scoped,
-                    scoped && !reader.IsDBNull(7) ? reader.GetInt32(7) : null, scoped ? reader.GetInt64(8) : 0);
+                    scoped && !reader.IsDBNull(7) ? reader.GetInt32(7) : null, scoped ? reader.GetInt64(8) : 0,
+                    scoped && !reader.IsDBNull(9) ? reader.GetString(9) : null,
+                    scoped && !reader.IsDBNull(10) && reader.GetBoolean(10));
             }
             finally
             {
@@ -60,7 +70,7 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
                         Activity.Current?.TraceId.ToString() ?? "none",
                         Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds);
             }
-        }, cancellationToken);
+        }
 
     public Task<(string Result, string? Token, string? Username)> LoginAsync(
         string username, string password, CancellationToken cancellationToken) =>
@@ -81,8 +91,17 @@ public sealed class PostgresSessionStore(PostgresTransactions transactions, Post
                 id = reader.GetInt32(0); hash = reader.GetString(1); active = !reader.IsDBNull(2) && reader.GetBoolean(2);
             }
             bool correct;
+            var bcryptStarted = Stopwatch.GetTimestamp();
             try { correct = BCrypt.Net.BCrypt.Verify(password, hash); }
             catch (Exception error) when (error is BCrypt.Net.SaltParseException or ArgumentException) { correct = false; }
+            finally
+            {
+                if (environment?.IsDevelopment() == true)
+                    logger?.LogInformation(
+                        "C# password verification timing trace_id={TraceId} verification_ms={VerificationMs:F1}",
+                        Activity.Current?.TraceId.ToString() ?? "none",
+                        Stopwatch.GetElapsedTime(bcryptStarted).TotalMilliseconds);
+            }
             if (!correct || !active)
             {
                 await audit.WriteAsync(db, new AuditEvent(Guid.NewGuid(), Guid.NewGuid(),

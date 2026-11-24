@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-24: Consolidated scoped session/client reads and added Development-only password timing. See C# scoped request consolidation.
 - 2026-11-23: Phase 8 static frontend review covered packaged pages/assets; authenticated browser acceptance awaits port 5080. See C# Phase 8 frontend review.
 - 2026-11-23: C# phases 6B/7C passed; tests run without Python and legacy Python test scripts were removed. See CHANGELOG_ARCHIVE.md.
 - 2026-11-22: P62 local readiness, Supabase isolation and Aadil's feature acceptance passed; Render is postponed. See C# local report and Verification acceptance.

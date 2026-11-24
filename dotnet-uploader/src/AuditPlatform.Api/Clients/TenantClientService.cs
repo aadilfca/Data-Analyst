@@ -33,44 +33,135 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         """;
 
     public Task<ClientResult> ListAsync(VerifiedSession? session, bool includeInactive, string? search,
-        int? limit, int offset, CancellationToken ct = default) => transactions.ExecuteAsync(async (db, token) =>
+        int? limit, int offset, CancellationToken ct = default)
     {
-        var authorizationStarted = Stopwatch.GetTimestamp();
-        var (status, actor) = await AuthorizeAsync(db, session, false, false, token);
-        var authorizationMs = Stopwatch.GetElapsedTime(authorizationStarted).TotalMilliseconds;
-        if (actor is null)
+        if (session?.TenantContextRequired == true)
+            return ListScopedAsync(session, includeInactive, search, limit, offset, ct);
+
+        return transactions.ExecuteAsync(async (db, token) =>
         {
-            LogListTiming(authorizationMs, 0, status.ToString());
-            return new ClientResult(status);
-        }
-        if (limit is < 1 or > 200 || offset < 0) return new ClientResult(ClientStatus.Invalid);
-        // One statement gives count and page the same snapshot, even when the
-        // requested page is empty. No cross-tenant count is exposed.
+            var authorizationStarted = Stopwatch.GetTimestamp();
+            var (status, actor) = await AuthorizeAsync(db, session, false, false, token);
+            var authorizationMs = Stopwatch.GetElapsedTime(authorizationStarted).TotalMilliseconds;
+            if (actor is null)
+            {
+                LogListTiming(authorizationMs, 0, status.ToString());
+                return new ClientResult(status);
+            }
+            if (limit is < 1 or > 200 || offset < 0) return new ClientResult(ClientStatus.Invalid);
+            // One statement gives count and page the same snapshot, even when the
+            // requested page is empty. No cross-tenant count is exposed.
+            await using var command = db.CreateCommand($"""
+                WITH matches AS MATERIALIZED (
+                    SELECT {Columns} FROM public.clients c
+                    JOIN public.platform_tenant_client_homes h ON h.client_id=c.id
+                    WHERE {Scope} AND ($4 OR c.is_active IS TRUE)
+                    AND ($5::text IS NULL OR c.client_code ILIKE $5 OR c.client_name ILIKE $5 OR c.industry ILIKE $5)
+                )
+                SELECT totals.total,c.* FROM (SELECT count(*) total FROM matches) totals
+                LEFT JOIN LATERAL (SELECT * FROM matches ORDER BY client_name,id LIMIT $6 OFFSET $7) c ON TRUE
+                ORDER BY c.client_name,c.id
+                """);
+            AddActor(command, actor);
+            command.Parameters.AddWithValue(includeInactive);
+            command.Parameters.AddWithValue(NpgsqlDbType.Text, string.IsNullOrEmpty(search) ? DBNull.Value : "%" + search + "%");
+            command.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)limit ?? DBNull.Value);
+            command.Parameters.AddWithValue(offset);
+            var queryStarted = Stopwatch.GetTimestamp();
+            await using var reader = await command.ExecuteReaderAsync(token);
+            var rows = new List<TenantClient>(); long total = 0;
+            while (await reader.ReadAsync(token))
+            {
+                total = reader.GetInt64(0);
+                if (!reader.IsDBNull(1)) rows.Add(Read(reader, 1));
+            }
+            LogListTiming(authorizationMs, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, "success");
+            return new ClientResult(ClientStatus.Success, rows, total);
+        }, ct);
+    }
+
+    private Task<ClientResult> ListScopedAsync(VerifiedSession session, bool includeInactive, string? search,
+        int? limit, int offset, CancellationToken ct) => transactions.ExecuteAsync(async (db, token) =>
+    {
+        if (session.UserId <= 0 || !AuthenticationService.ValidToken(session.Token))
+            return new ClientResult(ClientStatus.Forbidden);
+        if (session.TenantId is null) return new ClientResult(ClientStatus.AmbiguousTenant);
+
+        // Resolve the live session, tenant role, assignments, total and page in
+        // one statement so a remote database round trip is not spent between
+        // authorization and the client listing.
         await using var command = db.CreateCommand($"""
-            WITH matches AS MATERIALIZED (
-                SELECT {Columns} FROM public.clients c
+            WITH authorized AS MATERIALIZED (
+                SELECT s.token,u.id AS user_id,m.tenant_id,m.tenant_role
+                FROM public.sessions s
+                JOIN public.users u ON u.id=s.user_id
+                JOIN public.platform_tenant_memberships m ON m.user_id=u.id
+                WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
+                  AND m.tenant_id=$3 AND m.is_active IS TRUE
+                  AND s.selected_tenant_id=$3 AND s.context_version=$4
+                FOR SHARE OF s,u
+            ),
+            matches AS MATERIALIZED (
+                SELECT {Columns}
+                FROM public.clients c
                 JOIN public.platform_tenant_client_homes h ON h.client_id=c.id
-                WHERE {Scope} AND ($4 OR c.is_active IS TRUE)
-                AND ($5::text IS NULL OR c.client_code ILIKE $5 OR c.client_name ILIKE $5 OR c.industry ILIKE $5)
+                CROSS JOIN authorized a
+                WHERE h.tenant_id=a.tenant_id
+                  AND (a.tenant_role='admin' OR (c.is_active IS TRUE AND EXISTS (
+                      SELECT 1 FROM public.platform_audit_engagements e
+                      JOIN public.platform_engagement_assignments ea
+                        ON ea.engagement_id=e.id AND ea.firm_tenant_id=e.firm_tenant_id
+                      WHERE e.firm_tenant_id=a.tenant_id AND e.client_id=c.id AND e.is_active IS TRUE
+                        AND ea.user_id=a.user_id AND ea.is_active IS TRUE)))
+                  AND ($5 OR c.is_active IS TRUE)
+                  AND ($6::text IS NULL OR c.client_code ILIKE $6 OR c.client_name ILIKE $6 OR c.industry ILIKE $6)
+                  AND ($7::integer IS NULL OR $7 BETWEEN 1 AND 200) AND $8>=0
+            ),
+            totals AS (SELECT count(*) AS total FROM matches),
+            page AS MATERIALIZED (
+                SELECT * FROM matches ORDER BY client_name,id
+                LIMIT CASE WHEN $7::integer IS NULL THEN NULL
+                           WHEN $7 BETWEEN 1 AND 200 THEN $7 ELSE 0 END
+                OFFSET CASE WHEN $8>=0 THEN $8 ELSE 0 END
             )
-            SELECT totals.total,c.* FROM (SELECT count(*) total FROM matches) totals
-            LEFT JOIN LATERAL (SELECT * FROM matches ORDER BY client_name,id LIMIT $6 OFFSET $7) c ON TRUE
-            ORDER BY c.client_name,c.id
+            SELECT EXISTS(SELECT 1 FROM authorized),totals.total,page.*
+            FROM totals LEFT JOIN page ON TRUE
+            ORDER BY page.client_name,page.id
             """);
-        AddActor(command, actor);
+        command.Parameters.AddWithValue(session.Token);
+        command.Parameters.AddWithValue(session.UserId);
+        command.Parameters.AddWithValue(session.TenantId.Value);
+        command.Parameters.AddWithValue(session.ContextVersion);
         command.Parameters.AddWithValue(includeInactive);
         command.Parameters.AddWithValue(NpgsqlDbType.Text, string.IsNullOrEmpty(search) ? DBNull.Value : "%" + search + "%");
         command.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)limit ?? DBNull.Value);
         command.Parameters.AddWithValue(offset);
+
         var queryStarted = Stopwatch.GetTimestamp();
         await using var reader = await command.ExecuteReaderAsync(token);
-        var rows = new List<TenantClient>(); long total = 0;
-        while (await reader.ReadAsync(token))
+        if (!await reader.ReadAsync(token))
         {
-            total = reader.GetInt64(0);
-            if (!reader.IsDBNull(1)) rows.Add(Read(reader, 1));
+            LogListTiming(0, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, "missing_result");
+            return new ClientResult(ClientStatus.Forbidden);
         }
-        LogListTiming(authorizationMs, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, "success");
+        var authorized = reader.GetBoolean(0);
+        var total = reader.GetInt64(1);
+        if (!authorized)
+        {
+            LogListTiming(0, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, ClientStatus.Forbidden.ToString());
+            return new ClientResult(ClientStatus.Forbidden);
+        }
+        if (limit is < 1 or > 200 || offset < 0)
+        {
+            LogListTiming(0, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, ClientStatus.Invalid.ToString());
+            return new ClientResult(ClientStatus.Invalid);
+        }
+        var rows = new List<TenantClient>();
+        do
+        {
+            if (!reader.IsDBNull(2)) rows.Add(Read(reader, 2));
+        } while (await reader.ReadAsync(token));
+        LogListTiming(0, Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds, "success");
         return new ClientResult(ClientStatus.Success, rows, total);
     }, ct);
 
@@ -151,6 +242,9 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     public Task<ClientResult> SelectionAsync(VerifiedSession? session, int? requestedId, CancellationToken ct = default) =>
         transactions.ExecuteAsync(async (db, token) =>
         {
+            if (session?.TenantContextRequired == true)
+                return await SelectScopedAsync(db,session,requestedId,token);
+
             var (status, actor) = await AuthorizeAsync(db, session, false, false, token);
             if (actor is null) return new ClientResult(status);
             // Lock the real session; never accept a cached selected-client claim.
@@ -188,6 +282,64 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
             }
             return new ClientResult(ClientStatus.Success, client is null ? [] : [client], Username: actor.Username);
         }, ct);
+
+    private async Task<ClientResult> SelectScopedAsync(PostgresTransactionContext db,VerifiedSession session,
+        int? requestedId,CancellationToken ct)
+    {
+        if (session.UserId<=0 || !AuthenticationService.ValidToken(session.Token))
+            return new ClientResult(ClientStatus.Forbidden);
+        if (session.TenantId is null) return new ClientResult(ClientStatus.AmbiguousTenant);
+
+        // Keep the session lock and membership checks, but fetch the selected
+        // client and its current assignment with the same authorization read.
+        await using var command=db.CreateCommand("""
+            WITH authorized AS MATERIALIZED (
+                SELECT s.selected_client_id,u.id AS user_id,u.username,m.tenant_id,m.tenant_role
+                FROM public.sessions s
+                JOIN public.users u ON u.id=s.user_id
+                JOIN public.platform_tenant_memberships m ON m.user_id=u.id
+                WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
+                  AND m.tenant_id=$3 AND m.is_active IS TRUE
+                  AND s.selected_tenant_id=$3 AND s.context_version=$4
+                FOR UPDATE OF s FOR SHARE OF u
+            )
+            SELECT a.selected_client_id,a.user_id,a.username,a.tenant_id,a.tenant_role,
+                   c.id,c.client_code,c.client_name,c.industry,c.contact_person,c.email,c.phone,c.is_active,c.created_at,
+                   (c.id IS NOT NULL AND h.client_id IS NOT NULL AND c.is_active IS TRUE
+                    AND (a.tenant_role='admin' OR EXISTS (
+                        SELECT 1 FROM public.platform_engagement_assignments ea
+                        JOIN public.platform_audit_engagements e
+                          ON e.id=ea.engagement_id AND e.firm_tenant_id=ea.firm_tenant_id
+                        WHERE ea.user_id=a.user_id AND ea.firm_tenant_id=a.tenant_id
+                          AND e.client_id=c.id AND ea.is_active IS TRUE AND e.is_active IS TRUE))) AS client_allowed
+            FROM authorized a
+            LEFT JOIN public.clients c ON c.id=COALESCE($5,a.selected_client_id)
+            LEFT JOIN public.platform_tenant_client_homes h
+              ON h.client_id=c.id AND h.tenant_id=a.tenant_id
+            """);
+        command.Parameters.AddWithValue(session.Token);
+        command.Parameters.AddWithValue(session.UserId);
+        command.Parameters.AddWithValue(session.TenantId.Value);
+        command.Parameters.AddWithValue(session.ContextVersion);
+        command.Parameters.AddWithValue(NpgsqlDbType.Integer,(object?)requestedId??DBNull.Value);
+        await using var reader=await command.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return new ClientResult(ClientStatus.Forbidden);
+
+        int? selected = reader.IsDBNull(0) ? null : reader.GetInt32(0);
+        var actor = new Actor(reader.GetInt32(3), reader.GetInt32(1), reader.GetString(2), reader.GetString(4));
+        TenantClient? client = reader.GetBoolean(14) ? Read(reader, 5) : null;
+        await reader.DisposeAsync();
+        if (requestedId is not null && client is null) return new ClientResult(ClientStatus.NotFound);
+        if (requestedId is not null || (selected is not null && client is null))
+        {
+            await using var update = db.CreateCommand("UPDATE public.sessions SET selected_client_id=$1 WHERE token=$2");
+            update.Parameters.AddWithValue(NpgsqlDbType.Integer, client is null ? DBNull.Value : client.Id);
+            update.Parameters.AddWithValue(session.Token);
+            await update.ExecuteNonQueryAsync(ct);
+            await AuditAsync(db, actor, client?.Id ?? selected!.Value, requestedId is null ? "ClearSelection" : "Select", ct);
+        }
+        return new ClientResult(ClientStatus.Success, client is null ? [] : [client], Username: actor.Username);
+    }
 
     private static async Task<(ClientStatus, Actor?)> AuthorizeAsync(PostgresTransactionContext db,
         VerifiedSession? session, bool admin, bool lockForMutation, CancellationToken ct)

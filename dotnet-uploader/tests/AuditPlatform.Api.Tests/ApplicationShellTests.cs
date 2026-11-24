@@ -87,6 +87,8 @@ public sealed class ApplicationShellTests(PostgresFixture fixture) : IClassFixtu
         var clients=new TenantClientService(tx,audit);
         Assert.Equal(101,(await users.ResolveSoleTenantAsync(inA,Token)).TenantId);
         Assert.Equal(ClientStatus.Success,(await clients.SelectionAsync(inA,10,Token)).Status);
+        Assert.Equal(10,Assert.Single((await clients.SelectionAsync(inA,null,Token)).Clients!).Id);
+        Assert.Equal(10,Assert.Single((await clients.ListAsync(inA,false,null,null,0,Token)).Clients!).Id);
         Assert.True(await service.SelectAsync(inA,102,TenantSessionService.ContextKey(inA),Token));
         var inB=(await store.FindAsync(initial.Token,Token))!;
         Assert.Equal(102,inB.TenantId); Assert.Null(inB.ClientId);
@@ -95,6 +97,19 @@ public sealed class ApplicationShellTests(PostgresFixture fixture) : IClassFixtu
         Assert.Equal(ClientStatus.Forbidden,(await clients.SaveAsync(inA,null,new("STALE","Must not write"),Token)).Status);
         Assert.Equal(TenantUserStatus.Forbidden,(await users.ResolveSoleTenantAsync(inB,Token)).Status);
         Assert.Equal(20,Assert.Single((await clients.ListAsync(inB,false,null,null,0,Token)).Clients!).Id);
+        Assert.Equal(1,(await clients.ListAsync(inB,false,"Beta",10,0,Token)).Total);
+        Assert.Equal(ClientStatus.Invalid,(await clients.ListAsync(inB,false,null,201,0,Token)).Status);
+        Assert.Equal(ClientStatus.Success,(await clients.SelectionAsync(inB,20,Token)).Status);
+        Assert.Equal(20,Assert.Single((await clients.SelectionAsync(inB,null,Token)).Clients!).Id);
+        await Sql("UPDATE public.platform_engagement_assignments SET is_active=FALSE WHERE firm_tenant_id=102 AND user_id=1");
+        var staleSelection=await clients.SelectionAsync(inB,null,Token);
+        Assert.Equal(ClientStatus.Success,staleSelection.Status);
+        Assert.Empty(staleSelection.Clients!);
+        await using (var cleared=new NpgsqlCommand("SELECT selected_client_id IS NULL FROM public.sessions WHERE token=repeat('a',64)",connection))
+            Assert.True((bool)(await cleared.ExecuteScalarAsync(Token))!);
+        await using (var auditCheck=new NpgsqlCommand("SELECT count(*) FROM public.audit_log WHERE action='ClearSelection' AND client_id=20",connection))
+            Assert.True((long)(await auditCheck.ExecuteScalarAsync(Token))! >= 1);
+        await Sql("UPDATE public.platform_engagement_assignments SET is_active=TRUE WHERE firm_tenant_id=102 AND user_id=1");
         await Sql("ALTER TABLE public.audit_log RENAME TO audit_unavailable");
         try { await Assert.ThrowsAsync<PostgresException>(()=>service.SelectAsync(inB,101,TenantSessionService.ContextKey(inB),Token)); }
         finally { await Sql("ALTER TABLE public.audit_unavailable RENAME TO audit_log"); }

@@ -55,6 +55,9 @@ window.clientContextReady = new Promise(function (resolve) {
 // enforceClientSelection() shows a "reload" prompt instead of evicting the user as "no client
 // selected" (the cold-start bug this fixes).
 async function loadSessionClient() {
+    // Firm-level pages are authenticated and tenant-role-checked before the
+    // server sends their HTML. They do not need a selected-client lookup.
+    if (isFirmLevelPage()) return true;
     sessionClientLoadFailed = false;
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
@@ -1005,6 +1008,8 @@ const FIRM_LEVEL_TABS = [
 let adminProbePromise = null;
 
 function isAdminUser() {
+    if (isFirmLevelPage() && window.AppTenantAdministration)
+        return Promise.resolve(window.AppTenantAdministration.canAdminister === true);
     if (!adminProbePromise) {
         adminProbePromise = fetch(`${API_BASE}/api/users`)
             .then(res => res.ok)

@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## C# scoped request consolidation — 2026-11-24
+
+Scoped client listing now checks the live session, membership, assignments, count, and page in one statement. Current-client lookup combines session locking, membership, home-client, and assignment checks; selection writes and stale-selection audit remain transactional. Session lookup uses its existing single-statement path, and Development logs BCrypt verification duration without credentials.
+
+The Release test-project build passed with zero warnings/errors; ApplicationShell, TenantClientManagement, and Authentication tests passed 11/11 against disposable local PostgreSQL. A later authenticated HAR recorded 41/41 API calls successful; current-client median was 430 ms and client-list median 537 ms, versus earlier medians of 457 ms and 701 ms. Recent logs show 74–133 ms client-list queries on the consolidated path and a 77 ms median sampled session query. Captures are not controlled, and HARs cannot be traced to individual log events; API tracing is deferred. No Supabase schema/data or pool settings changed.
+
 ## C# Verification date selection — 2026-11-23
 
 Cash/Bank Verification now asks the C# API for the latest available date when no date range was saved, matching the existing vendor behavior. This avoids opening an empty current-day range when source data is older. Live Verification remains blocked until the C# schema migrations are applied and client accounts are assigned; no Supabase schema or data was changed.

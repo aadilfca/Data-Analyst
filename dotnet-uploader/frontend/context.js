@@ -5,6 +5,7 @@
     window.AppNativeAdministration = true;
     window.AppLocalDatabaseBackup = { native: true, enabled: tag.dataset.localDatabaseBackupEnabled === 'true' };
     const tenant = tag.dataset.tenant || '';
+    window.AppTenantAdministration = { canAdminister: tag.dataset.settingsAdmin === 'true' };
     if (tag.dataset.settingsEnabled === 'true') window.AppTenantSettings = {
         enabled: true, canEdit: tag.dataset.settingsAdmin === 'true'
     };

@@ -12,7 +12,8 @@ public sealed record SessionTenant(int Id, string Name, string Type, string Role
 public sealed record TenantSessionResult(bool Authenticated, IReadOnlyList<SessionTenant> Tenants,
     int? SelectedTenantId = null, string? ContextKey = null);
 
-public sealed class TenantSessionService(PostgresTransactions transactions, PostgresAuditWriter audit)
+public sealed class TenantSessionService(PostgresTransactions transactions, PostgresAuditWriter audit,
+    PostgresSingleStatementRead? singleReads = null)
 {
     // A context assertion binds a document to its session and selection revision.
     // It is not an authentication token and is never accepted without the cookie.
@@ -20,14 +21,21 @@ public sealed class TenantSessionService(PostgresTransactions transactions, Post
         Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(session.Token)))
         + ":" + session.ContextVersion.ToString(CultureInfo.InvariantCulture);
 
-    public Task<TenantSessionResult> ReadAsync(VerifiedSession? session, CancellationToken ct = default) =>
-        transactions.ExecuteAsync(async (db, token) =>
+    public Task<TenantSessionResult> ReadAsync(VerifiedSession? session, CancellationToken ct = default) => singleReads is null
+        ? transactions.ExecuteAsync((db, token) => ReadAsync(db.CreateCommand, session, token), ct)
+        : singleReads.ExecuteAsync("tenant_session_lookup", (db, token) => ReadAsync(db.CreateCommand, session, token), ct);
+
+    private Task<TenantSessionResult> ReadAsync(Func<string, Npgsql.NpgsqlCommand> createCommand,
+        VerifiedSession? session, CancellationToken token) => ReadCoreAsync(createCommand, session, token);
+
+    private async Task<TenantSessionResult> ReadCoreAsync(Func<string, Npgsql.NpgsqlCommand> createCommand,
+        VerifiedSession? session, CancellationToken token)
         {
             if (session is null || !session.TenantContextRequired) return new TenantSessionResult(false, []);
             var tenants = new List<SessionTenant>();
             // One statement rechecks the session and returns only this user's
             // current active memberships. Revoked selections have no name/role.
-            await using var command = db.CreateCommand("""
+            await using var command = createCommand("""
                 SELECT s.selected_tenant_id,s.context_version,t.id,t.name,t.tenant_type,m.tenant_role
                 FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 LEFT JOIN public.platform_tenant_memberships m ON m.user_id=u.id AND m.is_active IS TRUE
@@ -45,7 +53,7 @@ public sealed class TenantSessionService(PostgresTransactions transactions, Post
             }
             return new TenantSessionResult(found, tenants,
                 tenants.Any(t=>t.Id==selected) ? selected : null, ContextKey(session with { ContextVersion = version }));
-        }, ct);
+        }
 
     public Task<bool> SelectAsync(VerifiedSession? session, int tenantId, string expectedContext, CancellationToken ct = default) =>
         transactions.ExecuteAsync(async (db, token) =>

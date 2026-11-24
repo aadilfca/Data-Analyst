@@ -47,6 +47,7 @@ builder.Services.AddOptions<PostgresOptions>()
 builder.Services.AddSingleton<PostgresDataSourceFactory>();
 builder.Services.AddSingleton<PostgresTransactions>();
 builder.Services.AddSingleton<PostgresReadSnapshot>();
+builder.Services.AddSingleton<PostgresSingleStatementRead>();
 builder.Services.AddSingleton<PostgresReadinessCheck>();
 builder.Services.AddOptions<LogPersistenceOptions>()
     .Bind(builder.Configuration.GetSection(LogPersistenceOptions.SectionName))

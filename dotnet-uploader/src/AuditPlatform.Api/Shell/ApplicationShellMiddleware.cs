@@ -90,12 +90,18 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         if (html && !PublicPages.Contains(file))
         {
             if (session is null) { context.Response.Redirect("/static/login.html"); return; }
-            tenantContext=await tenants.ReadAsync(session,context.RequestAborted);
-            if (!tenantContext.Authenticated) { context.Response.Redirect("/static/login.html"); return; }
-            if (!picker && tenantContext.SelectedTenantId is null) { context.Response.Redirect("/shell/tenant_select.html"); return; }
-            var current=tenantContext.Tenants.SingleOrDefault(t=>t.Id==tenantContext.SelectedTenantId);
-            if (AdminPages.Contains(file) && current?.Role!="admin") { context.Response.StatusCode=403; return; }
-            if(file=="trial_balance.html"&&current?.Role!="admin"){context.Response.StatusCode=403;return;}
+            if (picker)
+            {
+                tenantContext=await tenants.ReadAsync(session,context.RequestAborted);
+                if (!tenantContext.Authenticated) { context.Response.Redirect("/static/login.html"); return; }
+            }
+            if (!picker && session.TenantId is null) { context.Response.Redirect("/shell/tenant_select.html"); return; }
+            if (!picker && !session.TenantMembershipValid) { context.Response.Redirect("/shell/tenant_select.html"); return; }
+            var currentRole=picker
+                ? tenantContext!.Tenants.SingleOrDefault(t=>t.Id==tenantContext.SelectedTenantId)?.Role
+                : session.TenantRole;
+            if (AdminPages.Contains(file) && currentRole!="admin") { context.Response.StatusCode=403; return; }
+            if(file=="trial_balance.html"&&currentRole!="admin"){context.Response.StatusCode=403;return;}
             if (!picker && !NoClientPages.Contains(file))
             {
                 var selected=await clients.SelectionAsync(session,null,context.RequestAborted);
@@ -116,7 +122,7 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
         var key=session is null ? "" : TenantSessionService.ContextKey(session);
         var selectedTenant=tenantContext is null ? session?.TenantId : tenantContext.SelectedTenantId;
         var settingsEnabled=settings.Value.Enabled ? "true" : "false";
-        var settingsAdmin=tenantContext?.Tenants.SingleOrDefault(t=>t.Id==selectedTenant)?.Role=="admin" ? "true" : "false";
+        var settingsAdmin=(tenantContext?.Tenants.SingleOrDefault(t=>t.Id==selectedTenant)?.Role ?? session?.TenantRole)=="admin" ? "true" : "false";
         var columnsEnabled=columns.Value.Enabled ? "true" : "false";
         var templatesEnabled=templates.Value.Enabled ? "true" : "false";
         var mappingsEnabled=mappings.Value.Enabled ? "true" : "false";
