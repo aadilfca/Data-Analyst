@@ -36,7 +36,8 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             var value = await snapshots.ExecuteAsync(async (db, token) =>
             {
                 await Authorize(db, session, query.ClientId, token);
-                var templates = await Templates(db, session.TenantId!.Value, query.TemplateId, token);
+                var combineMetadata = query.Operation is "availability" or "overdue";
+                var templates = await Templates(db, session.TenantId!.Value, query.TemplateId, token, combineMetadata);
                 if (query.TemplateId is {} id && templates.All(t => t.Id != id)) Reject("not_found", "template_not_found");
                 return query.Operation switch
                 {
@@ -113,44 +114,99 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
     internal async Task<DataBankTemplate> TemplateWithin(PostgresTransactionContext db, int tenant, int id, CancellationToken ct) =>
         (await Templates(db, tenant, id, ct)).SingleOrDefault() ?? throw new DataBankRejected("not_found", "template_not_found");
 
-    private async Task<List<DataBankTemplate>> Templates(PostgresTransactionContext db, int tenant, int? templateId, CancellationToken ct)
+    private async Task<List<DataBankTemplate>> Templates(PostgresTransactionContext db, int tenant, int? templateId,
+        CancellationToken ct, bool combineMetadata = false)
     {
         var templates = new List<DataBankTemplate>();
-        await using (var command = db.CreateCommand("""
-            SELECT t.id,d.display_name,t.data_purpose,COALESCE(t.has_subtotals_by_default,FALSE)
-            FROM public.templates t JOIN public.platform_tenant_templates d ON d.template_id=t.id
-            WHERE d.tenant_id=$1 AND d.binding_origin='native' AND t.is_active IS TRUE AND ($3::integer IS NULL OR t.id=$3)
-            ORDER BY d.display_name,t.id LIMIT $2
-            """))
-        {
-            command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(options.Value.MaximumTemplates + 1);
-            command.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)templateId ?? DBNull.Value);
-            await using var reader = await command.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct)) templates.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3), []));
-        }
-        if (templates.Count > options.Value.MaximumTemplates) Reject("too_large", "databank_configuration_capacity");
         var columns = new Dictionary<int, List<TemplateColumn>>();
         long definitionBytes = 0;
-        await using (var command = db.CreateCommand("""
-            SELECT p.template_id,m.id,c.display_name,p.storage_key,m.data_type,p.reconciliation_role,p.sort_order
-            FROM public.template_column_mappings p
-            JOIN public.platform_tenant_templates d ON d.tenant_id=p.tenant_id AND d.template_id=p.template_id
-            JOIN public.platform_tenant_columns c ON c.tenant_id=p.tenant_id AND c.column_id=p.column_id
-            JOIN public.master_columns m ON m.id=p.column_id AND m.column_name=p.storage_key
-            WHERE p.tenant_id=$1 AND d.binding_origin='native' AND c.binding_origin='native' AND m.is_active IS TRUE
-              AND p.template_id=ANY($2) ORDER BY p.template_id,p.sort_order,m.id LIMIT $3
-            """))
+        if (combineMetadata)
         {
-            command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(templates.Select(t => t.Id).ToArray());
-            command.Parameters.AddWithValue(checked(options.Value.MaximumTemplates * options.Value.MaximumColumns + 1));
+            // Availability and overdue reads share this bounded metadata load,
+            // avoiding a database round trip between template and column lookup.
+            var maximumColumnRows = checked(options.Value.MaximumTemplates * options.Value.MaximumColumns + 1);
+            var maximumColumns = maximumColumnRows - 1;
+            var templateIds = new HashSet<int>();
+            var columnRows = 0;
+            await using var command = db.CreateCommand("""
+                WITH template_rows AS MATERIALIZED (
+                    SELECT t.id,d.display_name,t.data_purpose,COALESCE(t.has_subtotals_by_default,FALSE) AS has_subtotals
+                    FROM public.templates t JOIN public.platform_tenant_templates d ON d.template_id=t.id
+                    WHERE d.tenant_id=$1 AND d.binding_origin='native' AND t.is_active IS TRUE AND ($3::integer IS NULL OR t.id=$3)
+                    ORDER BY d.display_name,t.id LIMIT $2
+                ), column_rows AS MATERIALIZED (
+                    SELECT p.template_id,m.id,c.display_name,p.storage_key,m.data_type,p.reconciliation_role,p.sort_order
+                    FROM template_rows t
+                    JOIN public.template_column_mappings p ON p.tenant_id=$1 AND p.template_id=t.id
+                    JOIN public.platform_tenant_columns c ON c.tenant_id=p.tenant_id AND c.column_id=p.column_id
+                    JOIN public.master_columns m ON m.id=p.column_id AND m.column_name=p.storage_key
+                    WHERE c.binding_origin='native' AND m.is_active IS TRUE
+                    ORDER BY p.template_id,p.sort_order,m.id LIMIT $4
+                )
+                SELECT t.id,t.display_name,t.data_purpose,t.has_subtotals,
+                       c.id,c.display_name,c.storage_key,c.data_type,c.reconciliation_role,c.sort_order
+                FROM template_rows t LEFT JOIN column_rows c ON c.template_id=t.id
+                ORDER BY t.display_name,t.id,c.sort_order,c.id
+                """);
+            command.Parameters.AddWithValue(tenant);
+            command.Parameters.AddWithValue(options.Value.MaximumTemplates + 1);
+            command.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)templateId ?? DBNull.Value);
+            command.Parameters.AddWithValue(maximumColumnRows);
             await using var reader = await command.ExecuteReaderAsync(ct);
             while (await reader.ReadAsync(ct))
             {
-                int id = reader.GetInt32(0); if (!columns.TryGetValue(id, out var list)) columns[id] = list = [];
-                definitionBytes += 128 + Encoding.UTF8.GetByteCount(reader.GetString(2)) + Encoding.UTF8.GetByteCount(reader.GetString(3));
+                int id = reader.GetInt32(0);
+                if (templateIds.Add(id))
+                {
+                    if (templates.Count >= options.Value.MaximumTemplates) Reject("too_large", "databank_configuration_capacity");
+                    templates.Add(new(id, reader.GetString(1), reader.GetString(2), reader.GetBoolean(3), []));
+                }
+                if (reader.IsDBNull(4)) continue;
+                if (++columnRows > maximumColumns) Reject("too_large", "databank_configuration_capacity");
+                if (!columns.TryGetValue(id, out var list)) columns[id] = list = [];
+                definitionBytes += 128 + Encoding.UTF8.GetByteCount(reader.GetString(5)) + Encoding.UTF8.GetByteCount(reader.GetString(6));
                 if (definitionBytes > options.Value.MaximumResponseBytes) Reject("too_large", "databank_configuration_capacity");
                 if (list.Count >= options.Value.MaximumColumns) Reject("too_large", "databank_configuration_capacity");
-                list.Add(new(reader.GetInt32(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), "", reader.IsDBNull(5) ? null : reader.GetString(5), null, false, reader.GetInt32(6), 0, true));
+                list.Add(new(reader.GetInt32(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), "",
+                    reader.IsDBNull(8) ? null : reader.GetString(8), null, false, reader.GetInt32(9), 0, true));
+            }
+        }
+        else
+        {
+            await using (var command = db.CreateCommand("""
+                SELECT t.id,d.display_name,t.data_purpose,COALESCE(t.has_subtotals_by_default,FALSE)
+                FROM public.templates t JOIN public.platform_tenant_templates d ON d.template_id=t.id
+                WHERE d.tenant_id=$1 AND d.binding_origin='native' AND t.is_active IS TRUE AND ($3::integer IS NULL OR t.id=$3)
+                ORDER BY d.display_name,t.id LIMIT $2
+                """))
+            {
+                command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(options.Value.MaximumTemplates + 1);
+                command.Parameters.AddWithValue(NpgsqlDbType.Integer, (object?)templateId ?? DBNull.Value);
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct)) templates.Add(new(reader.GetInt32(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3), []));
+            }
+            if (templates.Count > options.Value.MaximumTemplates) Reject("too_large", "databank_configuration_capacity");
+            await using (var command = db.CreateCommand("""
+                SELECT p.template_id,m.id,c.display_name,p.storage_key,m.data_type,p.reconciliation_role,p.sort_order
+                FROM public.template_column_mappings p
+                JOIN public.platform_tenant_templates d ON d.tenant_id=p.tenant_id AND d.template_id=p.template_id
+                JOIN public.platform_tenant_columns c ON c.tenant_id=p.tenant_id AND c.column_id=p.column_id
+                JOIN public.master_columns m ON m.id=p.column_id AND m.column_name=p.storage_key
+                WHERE p.tenant_id=$1 AND d.binding_origin='native' AND c.binding_origin='native' AND m.is_active IS TRUE
+                  AND p.template_id=ANY($2) ORDER BY p.template_id,p.sort_order,m.id LIMIT $3
+                """))
+            {
+                command.Parameters.AddWithValue(tenant); command.Parameters.AddWithValue(templates.Select(t => t.Id).ToArray());
+                command.Parameters.AddWithValue(checked(options.Value.MaximumTemplates * options.Value.MaximumColumns + 1));
+                await using var reader = await command.ExecuteReaderAsync(ct);
+                while (await reader.ReadAsync(ct))
+                {
+                    int id = reader.GetInt32(0); if (!columns.TryGetValue(id, out var list)) columns[id] = list = [];
+                    definitionBytes += 128 + Encoding.UTF8.GetByteCount(reader.GetString(2)) + Encoding.UTF8.GetByteCount(reader.GetString(3));
+                    if (definitionBytes > options.Value.MaximumResponseBytes) Reject("too_large", "databank_configuration_capacity");
+                    if (list.Count >= options.Value.MaximumColumns) Reject("too_large", "databank_configuration_capacity");
+                    list.Add(new(reader.GetInt32(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), "", reader.IsDBNull(5) ? null : reader.GetString(5), null, false, reader.GetInt32(6), 0, true));
+                }
             }
         }
         var result = templates.Select(t => t with { Columns = columns.GetValueOrDefault(t.Id) ?? [] }).ToList();
@@ -263,6 +319,8 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
     private async Task<object> Overdue(PostgresTransactionContext db, int tenant, DataBankQuery q, List<DataBankTemplate> templates, CancellationToken ct)
     {
         var inventory = await InventoryRows(db, q, ct); var frequency = await Frequencies(db, q.ClientId, ct); var holidays = await Holidays(db, tenant, ct);
+        var exactHolidays = holidays.Where(h => !h.Yearly).Select(h => h.Date).ToHashSet();
+        var yearlyHolidays = holidays.Where(h => h.Yearly).Select(h => (h.Date.Month, h.Date.Day)).ToHashSet();
         string clientName;
         await using (var command = db.CreateCommand("SELECT client_name FROM public.clients WHERE id=$1"))
         { command.Parameters.AddWithValue(q.ClientId); clientName = (string)(await command.ExecuteScalarAsync(ct))!; }
@@ -276,7 +334,8 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
             for (int day = start.DayNumber + 1; day <= today.DayNumber; day++)
             {
                 ct.ThrowIfCancellationRequested(); var date = DateOnly.FromDayNumber(day);
-                if (date.DayOfWeek != DayOfWeek.Sunday && !holidays.Any(h => h.Date == date || h.Yearly && h.Date.Month == date.Month && h.Date.Day == date.Day)) elapsed++;
+                if (date.DayOfWeek != DayOfWeek.Sunday && !exactHolidays.Contains(date)
+                    && !yearlyHolidays.Contains((date.Month, date.Day))) elapsed++;
             }
             if (elapsed > allowed) rows.Add((elapsed - allowed, new { client_id = q.ClientId, client_name = clientName, template_id = t.Id, template_name = t.Name, last_upload_date = last, frequency = freq, days_overdue = elapsed - allowed }));
         }

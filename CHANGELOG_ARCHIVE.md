@@ -1,5 +1,11 @@
 # Changelog Archive
 
+## C# Data Bank read round trips — 2026-11-24
+
+Availability and overdue reads now load bounded template/column metadata in one SQL statement instead of two. Overdue calculations use exact-date and yearly-holiday hash sets, avoiding repeated scans of the holiday list. Authorization rechecks, tenant filters, size limits, response shape, freshness, and other operations retain their existing paths; no controller, frontend, schema, or Supabase data changed.
+
+Verification: isolated Release test-project build passed with zero warnings/errors. Focused Data Bank tests could not complete: the disposable PostgreSQL fixture's `initdb` was denied a Windows restricted token by this environment, before application tests ran. The supplied HAR shows all availability, overdue, and metrics calls returned 200; timings were 1.26–1.50 s, 1.39–1.44 s, and 1.63–1.82 s respectively, with no consistent speed gain. No production database changed; local acceptance remains pending.
+
 ## C# scoped request consolidation — 2026-11-24
 
 Scoped client listing now checks the live session, membership, assignments, count, and page in one statement. Current-client lookup combines session locking, membership, home-client, and assignment checks; selection writes and stale-selection audit remain transactional. Session lookup uses its existing single-statement path, and Development logs BCrypt verification duration without credentials.
