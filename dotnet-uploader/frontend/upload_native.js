@@ -525,7 +525,7 @@
     function buildPanels() {
         document.body.classList.add('native-upload');
         const status = panel('nativeUploadStatus', 'Upload status'); notice = node('p', '', { id: 'nativeUploadNotice', role: 'status', 'aria-live': 'polite' }); status.append(notice);
-        button('nativeCheckStaging', 'Check file receipt', checkStaging, status);
+        button('nativeCheckStaging', 'Check file receipt', checkStaging, status).hidden = true;
         const variance = node('label', null, { id: 'nativeVarianceLabel', hidden: '' });
         variance.append(node('input', null, { id: 'nativeConfirmVariance', type: 'checkbox' }), document.createTextNode(' Acknowledge this checked Footing variance')); status.append(variance);
         detailPanel = panel('nativeUploadDetails', 'Validation details'); detailPanel.querySelector('h2').id = 'nativeDetailsTitle';

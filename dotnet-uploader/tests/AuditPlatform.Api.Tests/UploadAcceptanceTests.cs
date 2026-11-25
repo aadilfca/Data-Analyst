@@ -46,7 +46,14 @@ public sealed class UploadAcceptanceTests
             using var response = await client.GetAsync(asset, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("text/javascript", response.Content.Headers.ContentType?.MediaType);
-            Assert.NotEmpty(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            var content=await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.NotEmpty(content);
+            if(asset=="/static/upload_native.js")
+                Assert.Contains("button('nativeCheckStaging', 'Check file receipt', checkStaging, status).hidden = true;",content);
         }
+        using var login=await client.GetAsync("/static/login.html",TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK,login.StatusCode);
+        Assert.Contains("<link rel=\"icon\" href=\"data:,\">",
+            await login.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 }

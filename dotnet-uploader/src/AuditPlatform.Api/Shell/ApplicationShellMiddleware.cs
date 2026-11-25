@@ -150,7 +150,9 @@ public sealed class ApplicationShellMiddleware(RequestDelegate next)
             content=coordinator.Replace(content,"<script src=\"/static/api_utils.js\"></script><script src=\"/shell/upload_native.js\"></script>");
             content=content.Replace("</head>","<link rel=\"stylesheet\" href=\"/shell/upload_native.css\"></head>",StringComparison.Ordinal);
         }
-        content=content.Replace("<head>","<head>"+script,StringComparison.Ordinal);
+        // The C# shell has no branded icon yet. Declare that explicitly so the
+        // browser does not probe /favicon.ico and create a misleading 404.
+        content=content.Replace("<head>","<head><link rel=\"icon\" href=\"data:,\">"+script,StringComparison.Ordinal);
         await context.Response.WriteAsync(content,context.RequestAborted);
     }
 }
