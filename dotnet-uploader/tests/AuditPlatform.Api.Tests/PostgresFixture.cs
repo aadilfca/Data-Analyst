@@ -93,7 +93,7 @@ public sealed class PostgresFixture : IAsyncLifetime
         var settings = new NpgsqlConnectionStringBuilder(connectionString);
         var database = settings.Database ?? "";
         if (settings.Host != "127.0.0.1" || settings.Port != ownedPort
-            || settings.Username is not ("auditplatform_test" or "auditplatform_user_admin_runtime")
+            || settings.Username is not ("auditplatform_test" or "auditplatform_user_admin_runtime" or "audit_platform_runtime")
             || !database.StartsWith("auditplatform_foundation_", StringComparison.Ordinal)
             || !Guid.TryParseExact(database["auditplatform_foundation_".Length..], "N", out _))
             throw new InvalidOperationException("Tests require their own loopback fixture database.");
@@ -158,6 +158,30 @@ public sealed class PostgresFixture : IAsyncLifetime
             Password = password,
             Pooling = false
         };
+        return runtime.ConnectionString;
+    }
+
+    public async Task<string> CreateDashboardRuntimeConnectionStringAsync(CancellationToken cancellationToken)
+    {
+        const string role = "audit_platform_runtime";
+        var password = Guid.NewGuid().ToString("N");
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        await using (var create = new NpgsqlCommand($"CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{password}'", connection))
+            await create.ExecuteNonQueryAsync(cancellationToken);
+
+        var database = new NpgsqlConnectionStringBuilder(ConnectionString).Database;
+        await using (var connect = new NpgsqlCommand($"GRANT CONNECT ON DATABASE {database} TO {role}", connection))
+            await connect.ExecuteNonQueryAsync(cancellationToken);
+        await using (var schema = new NpgsqlCommand($"GRANT USAGE ON SCHEMA public TO {role}", connection))
+            await schema.ExecuteNonQueryAsync(cancellationToken);
+
+        var runtime = new NpgsqlConnectionStringBuilder(ConnectionString)
+        {
+            Username = role,
+            Password = password,
+            Pooling = false
+        };
+        RequireSafeTarget(runtime.ConnectionString, Port);
         return runtime.ConnectionString;
     }
 

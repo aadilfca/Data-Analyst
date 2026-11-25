@@ -35,8 +35,7 @@ public sealed class DashboardTests(PostgresFixture fixture):IClassFixture<Postgr
             CREATE TABLE public.platform_tenant_memberships(tenant_id INTEGER,user_id INTEGER,tenant_role TEXT,is_active BOOLEAN DEFAULT TRUE);
             CREATE TABLE public.clients(id INTEGER PRIMARY KEY,client_name TEXT,is_active BOOLEAN DEFAULT TRUE);
             CREATE TABLE public.platform_tenant_client_homes(client_id INTEGER,tenant_id INTEGER);
-            CREATE TABLE public.platform_audit_engagements(id INTEGER,firm_tenant_id INTEGER,client_id INTEGER,is_active BOOLEAN);
-            CREATE TABLE public.platform_engagement_assignments(engagement_id INTEGER,firm_tenant_id INTEGER,user_id INTEGER,team_role TEXT,is_active BOOLEAN);
+            CREATE TABLE public.platform_client_user_assignments(tenant_id INTEGER,client_id INTEGER,user_id INTEGER,team_role TEXT,is_active BOOLEAN DEFAULT TRUE);
             CREATE TABLE public.templates(id INTEGER PRIMARY KEY,is_active BOOLEAN DEFAULT TRUE);
             CREATE TABLE public.platform_tenant_templates(template_id INTEGER,tenant_id INTEGER,display_name TEXT,binding_origin TEXT);
             CREATE TABLE public.client_template_upload_frequency(client_id INTEGER,template_id INTEGER,frequency TEXT);
@@ -54,8 +53,7 @@ public sealed class DashboardTests(PostgresFixture fixture):IClassFixture<Postgr
                 (repeat('b',64),2,now()+interval '1 hour',101,0),(repeat('c',64),3,now()+interval '1 hour',102,0);
             INSERT INTO public.clients VALUES(1,'Client A',TRUE),(2,'Client B',TRUE),(3,'Other tenant',TRUE);
             INSERT INTO public.platform_tenant_client_homes VALUES(1,101),(2,101),(3,102);
-            INSERT INTO public.platform_audit_engagements VALUES(1,101,1,TRUE);
-            INSERT INTO public.platform_engagement_assignments VALUES(1,101,2,'internee',TRUE);
+            INSERT INTO public.platform_client_user_assignments VALUES(101,1,2,'internee',TRUE);
             INSERT INTO public.templates VALUES(1,TRUE);
             INSERT INTO public.platform_tenant_templates VALUES(1,101,'Template A','native');
             INSERT INTO public.client_data(client_id,template_id,extract_date) VALUES(1,1,'2026-11-13'),(2,1,'2026-11-18'),(3,1,'2026-01-01');
@@ -70,20 +68,62 @@ public sealed class DashboardTests(PostgresFixture fixture):IClassFixture<Postgr
         var root=new DirectoryInfo(AppContext.BaseDirectory);
         while(root is not null&&!File.Exists(Path.Combine(root.FullName,"AuditPlatform.slnx")))root=root.Parent;
         Assert.NotNull(root);
+        var dashboardGrantScript=await File.ReadAllTextAsync(Path.Combine(root.FullName,"database/permissions/runtime_dashboard_read_grants.sql"),Token);
+        var runtimeConnection=await fixture.CreateDashboardRuntimeConnectionStringAsync(Token);
+        var missingMigration=await Assert.ThrowsAsync<PostgresException>(async()=>
+        {
+            await using var command=new NpgsqlCommand(dashboardGrantScript,control);
+            await command.ExecuteNonQueryAsync(Token);
+        });
+        Assert.Contains("Dashboard schema is incomplete",missingMigration.MessageText);
+        await Sql("ROLLBACK");
         var migration=await File.ReadAllTextAsync(Path.Combine(root.FullName,"database/migrations/0023_error_log_tenant_scope.sql"),Token);
         await using(var tx=await control.BeginTransactionAsync(Token))
         {await using var command=new NpgsqlCommand(migration,control,tx);await command.ExecuteNonQueryAsync(Token);await tx.RollbackAsync(Token);}
         await Sql(migration);
         await Sql("INSERT INTO public.error_log(tenant_id,error_message,module,error_category) VALUES(101,'Visible <b>text</b>','Upload','System'),(102,'PRIVATE_FOREIGN','Upload','System')");
+        await Sql("""
+            GRANT SELECT (token,user_id,expiry,selected_tenant_id,context_version) ON public.sessions TO audit_platform_runtime;
+            GRANT SELECT (id,username,is_active) ON public.users TO audit_platform_runtime;
+            GRANT SELECT (tenant_id,user_id,is_active,tenant_role) ON public.platform_tenant_memberships TO audit_platform_runtime;
+            GRANT SELECT (id,tenant_type,is_active) ON public.platform_tenants TO audit_platform_runtime;
+            GRANT SELECT (client_id,tenant_id) ON public.platform_tenant_client_homes TO audit_platform_runtime;
+            GRANT SELECT (id,client_name,is_active) ON public.clients TO audit_platform_runtime;
+            GRANT SELECT (tenant_id,client_id,user_id,team_role,is_active) ON public.platform_client_user_assignments TO audit_platform_runtime;
+            GRANT SELECT (client_id,upload_date) ON public.uploaded_files TO audit_platform_runtime;
+            GRANT SELECT (client_id,template_id,is_deleted,change_detection_status,extract_date) ON public.client_data TO audit_platform_runtime;
+            GRANT SELECT (id,is_active) ON public.templates TO audit_platform_runtime;
+            GRANT SELECT (template_id,tenant_id,display_name,binding_origin) ON public.platform_tenant_templates TO audit_platform_runtime;
+            """);
         using var pool=fixture.CreatePool();var pg=Options.Create(new PostgresOptions());
         var snapshots=new PostgresReadSnapshot(pool,pg);var transactions=new PostgresTransactions(pool,pg);
         var limits=Options.Create(new LogPersistenceOptions());var sanitizer=new LogSanitizer(limits);var audit=new PostgresAuditWriter(sanitizer,limits);
         var errors=new DiagnosticErrorManagementService(snapshots,transactions,audit,sanitizer,Options.Create(new ErrorLogManagementOptions{Enabled=true}));
-        var dashboard=new DashboardService(snapshots,Options.Create(new DashboardOptions{Enabled=true}),new Clock());
+        var dashboard=new DashboardService(snapshots,Options.Create(new DashboardOptions{Enabled=true,MaximumConcurrentRequests=1,TimeoutSeconds=10}),new Clock());
         VerifiedSession Session(char token,int id,int tenant)=>new(new string(token,64),id,"untrusted snapshot",null,DateTime.UtcNow.AddHours(1),null,null,null,true,tenant,0);
         var admin=Session('a',1,101);var staff=Session('b',2,101);var other=Session('c',3,102);
         JsonElement Body(object value)=>JsonSerializer.SerializeToElement(value);
-        var stats=await dashboard.ReadAsync(admin,"stats",Token);Assert.Equal(200,stats.Status);Assert.Equal(2,Body(stats.Value).GetProperty("total_records").GetInt32());
+        var stats=await dashboard.ReadAsync(admin,"stats",Token);Assert.True(stats.Status==200,$"Dashboard stats returned {stats.Status}: {JsonSerializer.Serialize(stats.Value)}");Assert.Equal(2,Body(stats.Value).GetProperty("total_records").GetInt32());
+        // Hold the source read so a second dashboard call must wait for the sole slot.
+        await using(var blocker=await fixture.OpenControlConnectionAsync(Token))
+        {
+            await using(var lockCommand=new NpgsqlCommand("BEGIN; LOCK TABLE public.client_data IN ACCESS EXCLUSIVE MODE",blocker))
+                await lockCommand.ExecuteNonQueryAsync(Token);
+            var queuedFirst=dashboard.ReadAsync(admin,"stats",Token);
+            var waitingForLock=false;var waitWatch=System.Diagnostics.Stopwatch.StartNew();
+            while(waitWatch.Elapsed<TimeSpan.FromSeconds(5)&&!waitingForLock)
+            {
+                await using var activity=new NpgsqlCommand("SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'",control);
+                waitingForLock=(long)(await activity.ExecuteScalarAsync(Token))!>0;
+                if(!waitingForLock)await Task.Delay(20,Token);
+            }
+            Assert.True(waitingForLock,"The first dashboard request did not reach the held source-table lock.");
+            var queuedSecond=dashboard.ReadAsync(admin,"stats",Token);
+            await Task.Delay(100,Token);
+            Assert.False(queuedSecond.IsCompleted,"The second request should wait for the bounded dashboard slot.");
+            await using(var unlock=new NpgsqlCommand("ROLLBACK",blocker))await unlock.ExecuteNonQueryAsync(Token);
+            Assert.Equal(200,(await queuedFirst).Status);Assert.Equal(200,(await queuedSecond).Status);
+        }
         Assert.Equal(1,Body((await dashboard.ReadAsync(staff,"stats",Token)).Value).GetProperty("total_records").GetInt32());
         var kpi=Body((await dashboard.ReadAsync(admin,"kpi-stats",Token)).Value);
         Assert.Equal(1,kpi.GetProperty("open_queries").GetInt32());Assert.Equal(50m,kpi.GetProperty("verification_progress_pct").GetDecimal());
@@ -93,6 +133,60 @@ public sealed class DashboardTests(PostgresFixture fixture):IClassFixture<Postgr
         Assert.True(Body((await dashboard.ReadAsync(admin,"db-size",Token)).Value).GetProperty("total_bytes").GetInt64()>0);
         var overdue=Body((await dashboard.ReadAsync(admin,"overdue-uploads",Token)).Value).GetProperty("overdue");
         Assert.Equal(1,overdue.GetArrayLength());Assert.Equal(2,overdue[0].GetProperty("days_overdue").GetInt32());
+        await Sql("DROP TABLE public.client_template_upload_frequency");
+        var dailyFallback=Body((await dashboard.ReadAsync(admin,"overdue-uploads",Token)).Value).GetProperty("overdue");
+        Assert.Equal("Daily",dailyFallback[0].GetProperty("frequency").GetString());
+        Assert.Equal(2,dailyFallback[0].GetProperty("days_overdue").GetInt32());
+        try
+        {
+            using var runtimePool=fixture.CreatePool(connectionString:runtimeConnection);
+            var runtimeSnapshots=new PostgresReadSnapshot(runtimePool,pg);
+            var restrictedDashboard=new DashboardService(runtimeSnapshots,Options.Create(new DashboardOptions{Enabled=true,TimeoutSeconds=10}),new Clock());
+            Assert.Equal(503,(await restrictedDashboard.ReadAsync(admin,"stats",Token)).Status);
+            Assert.Equal(503,(await restrictedDashboard.ReadAsync(admin,"kpi-stats",Token)).Status);
+            Assert.Equal(503,(await restrictedDashboard.ReadAsync(admin,"overdue-uploads",Token)).Status);
+
+            await using(var grantCommand=new NpgsqlCommand(dashboardGrantScript,control))
+                await grantCommand.ExecuteNonQueryAsync(Token);
+
+            Assert.False((bool)(await new NpgsqlCommand("""
+                SELECT EXISTS (SELECT 1 FROM (VALUES
+                    ('verification_details'),('verification_sessions'),('platform_tenant_holidays'),
+                    ('error_log')) AS dashboard_tables(table_name)
+                WHERE pg_catalog.has_any_column_privilege('audit_platform_runtime',format('public.%I',table_name),'INSERT,UPDATE')
+                   OR pg_catalog.has_table_privilege('audit_platform_runtime',format('public.%I',table_name),'DELETE'))
+                """,control).ExecuteScalarAsync(Token))!);
+            Assert.Equal(200,(await restrictedDashboard.ReadAsync(admin,"stats",Token)).Status);
+            var restrictedKpi=Body((await restrictedDashboard.ReadAsync(admin,"kpi-stats",Token)).Value);
+            Assert.Equal(1,restrictedKpi.GetProperty("open_queries").GetInt32());
+            Assert.Equal(1,restrictedKpi.GetProperty("unresolved_errors").GetInt32());
+            Assert.Equal(JsonValueKind.Null,Body((await restrictedDashboard.ReadAsync(staff,"kpi-stats",Token)).Value).GetProperty("unresolved_errors").ValueKind);
+            var restrictedDaily=Body((await restrictedDashboard.ReadAsync(admin,"overdue-uploads",Token)).Value).GetProperty("overdue");
+            Assert.Equal(1,restrictedDaily.GetArrayLength());
+            Assert.Equal("Daily",restrictedDaily[0].GetProperty("frequency").GetString());
+
+            await Sql("""
+                CREATE TABLE public.client_template_upload_frequency(
+                    client_id INTEGER NOT NULL,template_id INTEGER NOT NULL,
+                    frequency TEXT NOT NULL DEFAULT 'Daily' CHECK(frequency IN ('Daily','Weekly','Monthly')),
+                    updated_at TIMESTAMPTZ DEFAULT now(),PRIMARY KEY(client_id,template_id));
+                INSERT INTO public.client_template_upload_frequency(client_id,template_id,frequency) VALUES(1,1,'Weekly');
+                UPDATE public.client_data SET extract_date='2026-10-01' WHERE client_id=1 AND template_id=1;
+                """);
+            await using(var grantCommand=new NpgsqlCommand(dashboardGrantScript,control))
+                await grantCommand.ExecuteNonQueryAsync(Token);
+            var weekly=Body((await restrictedDashboard.ReadAsync(admin,"overdue-uploads",Token)).Value).GetProperty("overdue");
+            Assert.Equal(1,weekly.GetArrayLength());
+            Assert.Equal("Weekly",weekly[0].GetProperty("frequency").GetString());
+            await Sql("UPDATE public.client_template_upload_frequency SET frequency='Monthly' WHERE client_id=1 AND template_id=1");
+            var monthly=Body((await restrictedDashboard.ReadAsync(admin,"overdue-uploads",Token)).Value).GetProperty("overdue");
+            Assert.Equal(1,monthly.GetArrayLength());
+            Assert.Equal("Monthly",monthly[0].GetProperty("frequency").GetString());
+        }
+        finally
+        {
+            await Sql("DROP OWNED BY audit_platform_runtime; DROP ROLE audit_platform_runtime");
+        }
         Assert.Equal(401,(await dashboard.ReadAsync(null,"stats",Token)).Status);
         Assert.Equal(403,(await dashboard.ReadAsync(admin with{ContextVersion=1},"stats",Token)).Status);
         var list=await errors.ReadAsync(admin,new(),ct:Token);Assert.Equal(1,list.Total);
@@ -116,7 +210,7 @@ public sealed class DashboardTests(PostgresFixture fixture):IClassFixture<Postgr
         var logger=new DiagnosticErrorLogger(transactions,pool,sanitizer,limits,NullLogger<DiagnosticErrorLogger>.Instance,Options.Create(new ErrorLogManagementOptions{Enabled=true}));
         var persisted=await logger.LogAsync(new(Guid.NewGuid(),"p57",new("authenticated",1,"Tenant A Admin"),null,"Dashboard","/api/dashboard/stats","GET",500,"System","Safe error",null,null,TenantId:101),Token);
         Assert.NotNull(persisted.ErrorId);Assert.Equal(2,(await errors.ReadAsync(admin,new(),ct:Token)).Total);
-        await Sql("UPDATE public.platform_engagement_assignments SET is_active=FALSE");
+        await Sql("UPDATE public.platform_client_user_assignments SET is_active=FALSE");
         Assert.Equal(0,Body((await dashboard.ReadAsync(staff,"stats",Token)).Value).GetProperty("total_records").GetInt32());
         Assert.Equal(200,(await errors.ChangeAsync(admin,errorId,null,null,Token)).Status);
         Assert.Equal(404,(await errors.ReadAsync(admin,new(),errorId,ct:Token)).Status);

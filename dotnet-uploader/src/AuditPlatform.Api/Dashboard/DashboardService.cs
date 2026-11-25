@@ -15,11 +15,15 @@ public sealed class DashboardService(PostgresReadSnapshot snapshots, IOptions<Da
     public async Task<DashboardResult> ReadAsync(VerifiedSession? session, string operation, CancellationToken ct = default)
     {
         if (!options.Value.Enabled) return new(503,new { code="dashboard_disabled" });
-        if (!await requests.WaitAsync(0,ct)) return new(429,new { code="dashboard_busy" });
         using var deadline=CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(options.Value.TimeoutSeconds));
+        var acquired=false;
         try
         {
+            // Keep the concurrency cap, but let normal dashboard fan-out queue within the
+            // same operation deadline instead of rejecting sibling page-load requests.
+            await requests.WaitAsync(deadline.Token);
+            acquired=true;
             var body=await snapshots.ExecuteAsync(async(db,token)=>
             {
                 var actor=await WorkspaceReadScope.Authorize(db,session,operation=="db-size",token);
@@ -39,7 +43,7 @@ public sealed class DashboardService(PostgresReadSnapshot snapshots, IOptions<Da
         catch(Npgsql.PostgresException e) when(e.SqlState is "42P01" or "42703" or "42501"){return new(503,new{code="dashboard_schema_review_required"});}
         catch(Npgsql.PostgresException e) when(e.SqlState is "57014" or "55P03"){return new(504,new{code="dashboard_timeout"});}
         catch(OperationCanceledException) when(!ct.IsCancellationRequested){return new(504,new{code="dashboard_timeout"});}
-        finally{requests.Release();}
+        finally{if(acquired)requests.Release();}
     }
     private static async Task<object> Stats(PostgresTransactionContext db,WorkspaceReadScope.Actor actor,CancellationToken ct)
     {
@@ -59,7 +63,8 @@ public sealed class DashboardService(PostgresReadSnapshot snapshots, IOptions<Da
     {
         await using var command=db.CreateCommand(WorkspaceReadScope.Clients+"""
             , active_lines AS (
-              SELECT d.*,s.client_id FROM public.verification_details d
+              SELECT d.id,d.session_id,d.client_data_id,d.transaction_ref,d.cleared_status,d.range_status,d.status,s.client_id
+              FROM public.verification_details d
               JOIN public.verification_sessions s ON s.id=d.session_id
               JOIN allowed_clients c ON c.id=s.client_id WHERE d.range_status='active' AND s.status<>'Cancelled'),
             latest AS (SELECT DISTINCT ON(client_data_id) client_id,transaction_ref,cleared_status
@@ -83,14 +88,19 @@ public sealed class DashboardService(PostgresReadSnapshot snapshots, IOptions<Da
     private async Task<object> Overdue(PostgresTransactionContext db,WorkspaceReadScope.Actor actor,CancellationToken ct)
     {
         // Aggregate source dates once. Data dates, rather than file-import times, drive overdue status.
-        await using var command=db.CreateCommand(WorkspaceReadScope.Clients+"""
-            SELECT c.id,c.client_name,t.id,n.display_name,max(d.extract_date),COALESCE(f.frequency,'Daily')
+        await using var frequencyTableCheck=db.CreateCommand("SELECT to_regclass('public.client_template_upload_frequency') IS NOT NULL");
+        var frequencyTableExists=(bool)(await frequencyTableCheck.ExecuteScalarAsync(ct))!;
+        var frequencyValue=frequencyTableExists?"COALESCE(f.frequency,'Daily')":"'Daily'::text";
+        var frequencyJoin=frequencyTableExists?"LEFT JOIN public.client_template_upload_frequency f ON f.client_id=c.id AND f.template_id=t.id":"";
+        var frequencyGroup=frequencyTableExists?",f.frequency":"";
+        await using var command=db.CreateCommand(WorkspaceReadScope.Clients+$"""
+            SELECT c.id,c.client_name,t.id,n.display_name,max(d.extract_date),{frequencyValue}
             FROM allowed_clients c JOIN public.client_data d ON d.client_id=c.id
             JOIN public.templates t ON t.id=d.template_id AND t.is_active IS TRUE
             JOIN public.platform_tenant_templates n ON n.template_id=t.id AND n.tenant_id=$1 AND n.binding_origin='native'
-            LEFT JOIN public.client_template_upload_frequency f ON f.client_id=c.id AND f.template_id=t.id
+            {frequencyJoin}
             WHERE d.is_deleted IS FALSE AND d.change_detection_status<>'deleted'
-            GROUP BY c.id,c.client_name,t.id,n.display_name,f.frequency ORDER BY c.id,t.id LIMIT $4
+            GROUP BY c.id,c.client_name,t.id,n.display_name{frequencyGroup} ORDER BY c.id,t.id LIMIT $4
             """);
         WorkspaceReadScope.Parameters(command,actor);command.Parameters.AddWithValue(options.Value.MaximumOverdueRows+1);
         var pairs=new List<(int Client,string ClientName,int Template,string TemplateName,DateOnly Last,string Frequency)>();

@@ -175,6 +175,20 @@ async function loadDataIntegritySummary() {
     }
 }
 
+// The dashboard API intentionally limits concurrent reads. Load its four independent
+// panels in two pairs so a normal page open does not queue its own requests at the server.
+let dashboardOverviewRequest = null;
+function loadDashboardOverview() {
+    if (dashboardOverviewRequest) return dashboardOverviewRequest;
+    dashboardOverviewRequest = (async function () {
+        await Promise.all([loadDashboardStats(), loadKpiStats()]);
+        await Promise.all([loadDbSize(), loadOverdueUploads()]);
+    })().finally(function () {
+        dashboardOverviewRequest = null;
+    });
+    return dashboardOverviewRequest;
+}
+
 // ---------- MODULE CARD NAVIGATION ----------
 // Every navigating dashboard card is wired here by id (no inline onclick in index.html).
 // Verification deliberately has no ?type= param — the verification hub itself is the
@@ -257,10 +271,7 @@ document.querySelectorAll('.module-card:not(.coming-soon)').forEach(card => {
 
 // ---------- LOAD ON PAGE OPEN ----------
 window.onload = function() {
-    loadDashboardStats();
-    loadDbSize();
-    loadKpiStats();
-    loadOverdueUploads();
+    loadDashboardOverview();
     loadDataIntegritySummary();
     const overdueCard = document.getElementById('overdueUploadsCard');
     if (overdueCard) overdueCard.addEventListener('click', toggleOverdueUploadsPanel);
@@ -269,10 +280,7 @@ window.onload = function() {
 // ---------- KEYBOARD SHORTCUTS ----------
 document.addEventListener('keydown', function(e) {
     if (e.key === 'r' || e.key === 'R') {
-        loadDashboardStats();
-        loadDbSize();
-        loadKpiStats();
-        loadOverdueUploads();
+        loadDashboardOverview();
         loadDataIntegritySummary();
     }
 });
