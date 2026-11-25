@@ -1,5 +1,6 @@
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
+using AuditPlatform.Api.Tenancy;
 
 namespace AuditPlatform.Api.Dashboard;
 
@@ -21,9 +22,8 @@ internal static class WorkspaceReadScope
         // Match the established tenant-first write lock order. Reads stay SELECT-only.
         if (writing)
         {
-            await using var tenant = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
-            tenant.Parameters.AddWithValue(session.TenantId.Value);
-            if (await tenant.ExecuteScalarAsync(ct) is null) throw new WorkspaceRejected("workspace_access_denied");
+            if (!await TenantWriteLock.LockActiveTenantAsync(db, session.TenantId.Value, true, ct))
+                throw new WorkspaceRejected("workspace_access_denied");
         }
         await using var command = db.CreateCommand("""
             SELECT u.username,m.tenant_role FROM public.sessions s

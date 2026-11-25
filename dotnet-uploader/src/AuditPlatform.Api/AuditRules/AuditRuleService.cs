@@ -7,6 +7,7 @@ using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Templates;
+using AuditPlatform.Api.Tenancy;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
@@ -1210,7 +1211,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
     {
         if (session is null || session.UserId <= 0 || !session.TenantContextRequired || session.TenantId is not > 0
             || !AuthenticationService.ValidToken(session.Token)) return null;
-        string tenantLock = write ? "FOR SHARE OF s,u,m FOR UPDATE OF t" : "FOR SHARE OF s,u,m,t";
+        if (write) await TenantWriteLock.AcquireAsync(db, true, ct);
         await using var command = db.CreateCommand($"""
             SELECT t.id FROM public.sessions s JOIN public.users u ON u.id=s.user_id
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id
@@ -1218,7 +1219,7 @@ public sealed class AuditRuleService(PostgresTransactions transactions, Postgres
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE
               AND m.tenant_id=$3 AND m.is_active IS TRUE AND m.tenant_role='admin'
               AND t.is_active IS TRUE AND s.selected_tenant_id=$3 AND s.context_version=$4
-            {tenantLock}
+            FOR SHARE OF s,u,m
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(session.TenantId.Value); command.Parameters.AddWithValue(session.ContextVersion);

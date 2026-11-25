@@ -3,6 +3,7 @@ using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Configuration;
+using AuditPlatform.Api.Tenancy;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
@@ -283,13 +284,8 @@ public sealed class TenantTemplateService(PostgresTransactions transactions,Post
             return Task.FromResult(new TemplateResult(TemplateStatus.Forbidden));
         return transactions.ExecuteAsync(async(db,token)=>
         {
-            await using(var config=db.CreateCommand(admin
-                ? "SELECT pg_advisory_xact_lock(746102)" : "SELECT pg_advisory_xact_lock_shared(746102)"))
-                await config.ExecuteNonQueryAsync(token);
-            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE"+(admin ? " FOR UPDATE" : "")))
-            {
-                tenant.Parameters.AddWithValue(session.TenantId.Value); if(await tenant.ExecuteScalarAsync(token) is null) return new TemplateResult(TemplateStatus.Forbidden);
-            }
+            if(!await TenantWriteLock.LockActiveTenantAsync(db,session.TenantId.Value,admin,token))
+                return new TemplateResult(TemplateStatus.Forbidden);
             Actor actor;
             await using(var command=db.CreateCommand("""
                 SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id

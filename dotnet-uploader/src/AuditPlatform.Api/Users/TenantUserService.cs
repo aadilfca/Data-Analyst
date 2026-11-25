@@ -3,6 +3,7 @@ using System.Text.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Tenancy;
 using Npgsql;
 
 namespace AuditPlatform.Api.Users;
@@ -76,11 +77,11 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
                 if (actor is null) return new(TenantUserStatus.Forbidden);
                 var hash = BCrypt.Net.BCrypt.HashPassword(password);
                 int userId;
-                // Global platform role remains NULL: tenant administrators are not platform
-                // administrators solely because of their tenant role.
+                // Omit the global platform role entirely. The runtime database
+                // account must not have permission to assign platform-admin roles.
                 await using (var insert = db.CreateCommand("""
-                    INSERT INTO public.users(username,password_hash,is_active,role)
-                    VALUES($1,$2,TRUE,NULL) RETURNING id
+                    INSERT INTO public.users(username,password_hash,is_active)
+                    VALUES($1,$2,TRUE) RETURNING id
                     """))
                 {
                     insert.Parameters.AddWithValue(username); insert.Parameters.AddWithValue(hash);
@@ -197,13 +198,8 @@ public sealed class TenantUserService(PostgresTransactions transactions, Postgre
         // the query proves actual membership.
         if (lockForMutation)
         {
-            // Serialize membership changes with upload/mapping authorization
-            // checks before locking the tenant row.
-            await using var serial = db.CreateCommand("SELECT pg_advisory_xact_lock(746102)");
-            await serial.ExecuteNonQueryAsync(ct);
-            await using var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
-            tenantLock.Parameters.AddWithValue(tenantId);
-            if (await tenantLock.ExecuteScalarAsync(ct) is null) return null;
+            // Coordinate tenant writes without requiring UPDATE on the tenant table.
+            if (!await TenantWriteLock.LockActiveTenantAsync(db, tenantId, true, ct)) return null;
         }
         var selection = session.TenantContextRequired ? " AND s.selected_tenant_id=$3 AND s.context_version=$4" : "";
         await using var command = db.CreateCommand($"""

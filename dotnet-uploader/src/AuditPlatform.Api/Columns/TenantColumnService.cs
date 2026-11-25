@@ -3,6 +3,7 @@ using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Tenancy;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
@@ -170,16 +171,9 @@ public sealed class TenantColumnService(PostgresTransactions transactions,Postgr
             return Task.FromResult(new ColumnResult(ColumnStatus.Forbidden));
         return transactions.ExecuteAsync(async(db,token)=>
         {
-            // Share legacy column/template serialization before any metadata
-            // row locks. Future dependent writers must use the same contract.
-            await using(var configuration=db.CreateCommand(admin
-                ? "SELECT pg_advisory_xact_lock(746102)" : "SELECT pg_advisory_xact_lock_shared(746102)"))
-                await configuration.ExecuteNonQueryAsync(token);
-            await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE"+(admin ? " FOR UPDATE" : "")))
-            {
-                tenant.Parameters.AddWithValue(session.TenantId.Value);
-                if(await tenant.ExecuteScalarAsync(token) is null) return new ColumnResult(ColumnStatus.Forbidden);
-            }
+            // Share legacy column/template serialization before metadata row locks.
+            if (!await TenantWriteLock.LockActiveTenantAsync(db, session.TenantId.Value, admin, token))
+                return new ColumnResult(ColumnStatus.Forbidden);
             Actor actor;
             await using(var command=db.CreateCommand("""
                 SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id

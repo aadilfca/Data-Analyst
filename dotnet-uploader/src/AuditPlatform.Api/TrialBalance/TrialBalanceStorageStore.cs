@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Configuration;
 using AuditPlatform.Api.Data;
+using AuditPlatform.Api.Tenancy;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -27,12 +28,11 @@ internal sealed class TrialBalanceStorageStore(IOptions<TrialBalanceStorageOptio
             throw new TrialBalanceStorageRejected(session is null?"unauthenticated":"forbidden","tb_access_denied");
         if(writing)
         {
-            await using(var gate=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await gate.ExecuteNonQueryAsync(ct);
+            await TenantWriteLock.AcquireAsync(db,true,ct);
             await using(var gate=db.CreateCommand("SELECT pg_advisory_xact_lock(hashtext($1))")) {gate.Parameters.AddWithValue("trial-balance-storage:"+client);await gate.ExecuteNonQueryAsync(ct);}
-            await using var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
-            tenant.Parameters.AddWithValue(session.TenantId.Value);if(await tenant.ExecuteScalarAsync(ct) is null) throw new TrialBalanceStorageRejected("forbidden","tb_access_denied");
+            if(!await TenantWriteLock.IsActiveAsync(db,session.TenantId.Value,ct)) throw new TrialBalanceStorageRejected("forbidden","tb_access_denied");
         }
-        string locks=writing?" FOR SHARE OF s,u,m,t,c,h":"";
+        string locks=writing?" FOR SHARE OF s,u,m,c,h":"";
         await using var command=db.CreateCommand("""
             SELECT u.id,u.username FROM public.sessions s JOIN public.users u ON u.id=s.user_id
             JOIN public.platform_tenant_memberships m ON m.user_id=u.id AND m.tenant_id=$3

@@ -5,6 +5,7 @@ using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
 using AuditPlatform.Api.Mappings;
 using AuditPlatform.Api.Settings;
+using AuditPlatform.Api.Tenancy;
 using System.Security.Cryptography;
 using System.Text.Json;
 using NpgsqlTypes;
@@ -84,13 +85,7 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
 
         return transactions.ExecuteAsync<ConfigurationBackupDocument?>(async (db, token) =>
         {
-            await using (var configuration = db.CreateCommand("SELECT pg_advisory_xact_lock(746102)"))
-                await configuration.ExecuteNonQueryAsync(token);
-            await using (var tenant = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
-            {
-                tenant.Parameters.AddWithValue(session.TenantId.Value);
-                if (await tenant.ExecuteScalarAsync(token) is null) return null;
-            }
+            if (!await TenantWriteLock.LockActiveTenantAsync(db, session.TenantId.Value, true, token)) return null;
             await using (var actor = db.CreateCommand("""
                 SELECT u.id FROM public.sessions s JOIN public.users u ON u.id=s.user_id
                 JOIN public.platform_tenant_memberships m ON m.user_id=u.id
@@ -315,9 +310,7 @@ public sealed class ConfigurationBackupService(PostgresTransactions transactions
         {
             return await transactions.ExecuteAsync(async(db,token)=>
             {
-                await using(var config=db.CreateCommand("SELECT pg_advisory_xact_lock(746102)")) await config.ExecuteNonQueryAsync(token);
-                await using(var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
-                { tenant.Parameters.AddWithValue(session.TenantId.Value); if(await tenant.ExecuteScalarAsync(token) is null) return new BackupResult("forbidden"); }
+                if(!await TenantWriteLock.LockActiveTenantAsync(db,session.TenantId.Value,true,token)) return new BackupResult("forbidden");
                 Actor actor;
                 await using(var command=db.CreateCommand("""
                     SELECT u.id,u.username FROM public.sessions s JOIN public.users u ON u.id=s.user_id

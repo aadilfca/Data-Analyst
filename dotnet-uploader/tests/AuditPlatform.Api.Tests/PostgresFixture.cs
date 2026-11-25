@@ -93,17 +93,18 @@ public sealed class PostgresFixture : IAsyncLifetime
         var settings = new NpgsqlConnectionStringBuilder(connectionString);
         var database = settings.Database ?? "";
         if (settings.Host != "127.0.0.1" || settings.Port != ownedPort
-            || settings.Username != "auditplatform_test"
+            || settings.Username is not ("auditplatform_test" or "auditplatform_user_admin_runtime")
             || !database.StartsWith("auditplatform_foundation_", StringComparison.Ordinal)
             || !Guid.TryParseExact(database["auditplatform_foundation_".Length..], "N", out _))
             throw new InvalidOperationException("Tests require their own loopback fixture database.");
     }
 
     public PostgresDataSourceFactory CreatePool(int maximumPoolSize = 2,
-        int timeoutSeconds = 3, CommitAcknowledgementProxy? proxy = null)
+        int timeoutSeconds = 3, CommitAcknowledgementProxy? proxy = null, string? connectionString = null)
     {
-        RequireSafeTarget(ConnectionString, Port);
-        var connection = new NpgsqlConnectionStringBuilder(ConnectionString);
+        var target = connectionString ?? ConnectionString;
+        RequireSafeTarget(target, Port);
+        var connection = new NpgsqlConnectionStringBuilder(target);
         if (proxy is not null)
         {
             if (proxy.UpstreamPort != Port)
@@ -119,6 +120,45 @@ public sealed class PostgresFixture : IAsyncLifetime
             MaximumPoolSize = maximumPoolSize, ConnectionTimeoutSeconds = 2,
             CommandTimeoutSeconds = timeoutSeconds
         }));
+    }
+
+    public async Task<string> CreateUserManagementRuntimeConnectionStringAsync(CancellationToken cancellationToken)
+    {
+        const string role = "auditplatform_user_admin_runtime";
+        var password = Guid.NewGuid().ToString("N");
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        await using (var create = new NpgsqlCommand($"CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{password}'", connection))
+            await create.ExecuteNonQueryAsync(cancellationToken);
+
+        var database = new NpgsqlConnectionStringBuilder(ConnectionString).Database;
+        string[] grantStatements =
+        [
+            $"GRANT CONNECT ON DATABASE {database} TO {role}",
+            $"GRANT USAGE ON SCHEMA public TO {role}",
+            $"GRANT SELECT (id,username,password_hash,is_active,role,last_login), UPDATE (last_login) ON public.users TO {role}",
+            $"GRANT INSERT (username,password_hash,is_active), UPDATE (username,password_hash) ON public.users TO {role}",
+            $"GRANT SELECT (token,user_id,expiry,selected_client_id) ON public.sessions TO {role}",
+            $"GRANT UPDATE (selected_client_id) ON public.sessions TO {role}",
+            $"GRANT SELECT (id,name,tenant_type,is_active) ON public.platform_tenants TO {role}",
+            $"GRANT SELECT (tenant_id,user_id,is_active,tenant_role), UPDATE (tenant_role,is_active) ON public.platform_tenant_memberships TO {role}",
+            $"GRANT INSERT (tenant_id,user_id,tenant_role) ON public.platform_tenant_memberships TO {role}",
+            $"GRANT INSERT (\"user\",action,module,details,event_id,operation_id,actor_user_id,actor_kind,client_id,correlation_id), SELECT (id) ON public.audit_log TO {role}",
+            $"DO $$ BEGIN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {role}', pg_catalog.pg_get_serial_sequence('public.users','id')::regclass); END; $$",
+            $"DO $$ BEGIN EXECUTE format('GRANT USAGE ON SEQUENCE %s TO {role}', pg_catalog.pg_get_serial_sequence('public.audit_log','id')::regclass); END; $$"
+        ];
+        foreach (var statement in grantStatements)
+        {
+            await using var grant = new NpgsqlCommand(statement, connection);
+            await grant.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var runtime = new NpgsqlConnectionStringBuilder(ConnectionString)
+        {
+            Username = role,
+            Password = password,
+            Pooling = false
+        };
+        return runtime.ConnectionString;
     }
 
     public async Task<NpgsqlConnection> OpenControlConnectionAsync(CancellationToken cancellationToken)

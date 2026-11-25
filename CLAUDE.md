@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-25: Replaced tenant-row write locks with a shared advisory-lock helper; added restricted-role user-creation regression coverage. See C# tenant lock permissions.
 - 2026-11-24: Data Bank metrics batch document counts and share bounded metadata reads. See CHANGELOG_ARCHIVE.md.
 - 2026-11-24: Data Bank availability and overdue reads consolidate metadata queries and use hash-set holiday lookups. See CHANGELOG_ARCHIVE.md.
 - 2026-11-24: Consolidated scoped session/client reads and added Development-only password timing. See C# scoped request consolidation.

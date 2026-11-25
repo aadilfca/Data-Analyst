@@ -3,6 +3,7 @@ using System.Text.Json;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Tenancy;
 using Npgsql;
 
 namespace AuditPlatform.Api.Settings;
@@ -140,12 +141,9 @@ public sealed class TenantSettingsService(PostgresTransactions transactions, Pos
             return Task.FromResult(new SettingsResult(SettingsStatus.Forbidden));
         return transactions.ExecuteAsync(async (db,token)=>
         {
-            // Same tenant-first lock order as existing tenant administration.
-            await using (var tenant=db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE"))
-            {
-                tenant.Parameters.AddWithValue(session.TenantId.Value);
-                if (await tenant.ExecuteScalarAsync(token) is null) return new SettingsResult(SettingsStatus.Forbidden);
-            }
+            // Preserve tenant-first serialization without requiring tenant-table UPDATE.
+            if (!await TenantWriteLock.LockActiveTenantAsync(db, session.TenantId.Value, admin, token))
+                return new SettingsResult(SettingsStatus.Forbidden);
             Actor actor;
             await using (var command=db.CreateCommand("""
                 SELECT u.id,u.username,m.tenant_role FROM public.sessions s JOIN public.users u ON u.id=s.user_id

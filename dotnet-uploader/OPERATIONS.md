@@ -16,6 +16,20 @@ For a verified empty target only, the reviewed order is the bootstrap, then migr
 
 After migrations 0001–0007, run `database/permissions/runtime_core_grants.sql` once as the database owner. It creates `audit_platform_runtime` with `LOGIN` and `NOINHERIT`, no password, and grants session management, limited login bookkeeping, tenant/client-card reads, and audit/diagnostic inserts. Set its password interactively with `psql` using `\password audit_platform_runtime`; do not put a password in SQL Editor text, a command line, or a file. The narrow updates to `users.last_login` and session-selection fields support the existing login/context row locks; they do not allow password or client edits. The script does not grant user/client administration, Columns/Templates reads or writes, transaction/history access, module writes, schema creation, or future-object default privileges. Add grants for each module only after reviewing its tables and behavior. Never put either database password in this repository; use .NET User Secrets locally and Render secret settings for deployment.
 
+### C# tenant User administration writes
+
+User listing is read-only by default. To enable tenant-user changes on the dedicated C# development database, first confirm migrations 0001–0007 and `runtime_core_grants.sql` are applied, then review and apply `database/permissions/runtime_user_admin_grants.sql` as the database owner. The script grants only user-name/password creation and updates, tenant membership/role/active-state writes, and the user identity sequence. It verifies the existing session-delete and audit-log insert grants, rejects broad user or membership permissions, and does not grant write access to the global `users.role` column. Do not run it against Python or production databases.
+
+After the grant script completes successfully, enable only the local user-write switch with the repository .NET SDK; keep client administration writes disabled until its separate phase:
+
+```powershell
+$dotnet = '.\dotnet-uploader\.dotnet\dotnet.exe'
+$project = '.\dotnet-uploader\src\AuditPlatform.Api\AuditPlatform.Api.csproj'
+& $dotnet user-secrets set 'UserManagement:WriteEnabled' 'true' --project $project
+```
+
+Rebuild Release, restart the C# tray server, and verify create, edit, deactivate, reactivate, and password reset with a test account on the development project. The API write gate returns HTTP 503 until the setting is enabled. User Secrets are local configuration and are not changed by the grant script.
+
 ### C# Data Bank read-only activation
 
 The dedicated development project has the reviewed `runtime_data_bank_read_grants.sql` grant, and local current-data reads are enabled. For a fresh instance only, apply the grant as database owner after reviewing its target. Keep history and exports separately gated until accepted. Missing optional upload-frequency metadata uses the Daily default. Account Ledger preview remains blocked pending its separate schema/adoption gate.

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using AuditPlatform.Api.Authentication;
 using AuditPlatform.Api.Data;
 using AuditPlatform.Api.Logging;
+using AuditPlatform.Api.Tenancy;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
@@ -349,8 +350,7 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         {
             // Serialize tenant/client scope changes with upload authorization
             // checks before resolving the selected tenant.
-            await using var serial = db.CreateCommand("SELECT pg_advisory_xact_lock(746102)");
-            await serial.ExecuteNonQueryAsync(ct);
+            await TenantWriteLock.AcquireAsync(db, true, ct);
         }
         int tenant;
         if (session.TenantContextRequired)
@@ -374,9 +374,7 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
         // mutations and prevents role/membership revocation during this action.
         if (lockForMutation)
         {
-            await using var tenantLock = db.CreateCommand("SELECT id FROM public.platform_tenants WHERE id=$1 AND is_active IS TRUE FOR UPDATE");
-            tenantLock.Parameters.AddWithValue(tenant);
-            if (await tenantLock.ExecuteScalarAsync(ct) is null) return (ClientStatus.Forbidden, null);
+            if (!await TenantWriteLock.IsActiveAsync(db, tenant, ct)) return (ClientStatus.Forbidden, null);
         }
         var contextCheck = session.TenantContextRequired ? " AND s.selected_tenant_id=$3 AND s.context_version=$4" : "";
         await using var command = db.CreateCommand($"""

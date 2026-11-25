@@ -112,6 +112,43 @@ public sealed class TenantUserManagementTests(PostgresFixture fixture) : IClassF
             Assert.True(reader.IsDBNull(0));
             Assert.True(BCrypt.Net.BCrypt.Verify("synthetic-password", reader.GetString(1)));
         }
+
+        var runtimeConnectionString = await fixture.CreateUserManagementRuntimeConnectionStringAsync(Token);
+        using (var runtimePool = fixture.CreatePool(connectionString: runtimeConnectionString))
+        {
+            var runtimeTransactions = new PostgresTransactions(runtimePool, Options.Create(new PostgresOptions()));
+            var runtimeService = new TenantUserService(runtimeTransactions,
+                new PostgresAuditWriter(new LogSanitizer(limits), limits));
+            await using var runtimeConnection = new NpgsqlConnection(runtimeConnectionString);
+            await runtimeConnection.OpenAsync(Token);
+            await using (var privileges = new NpgsqlCommand("""
+                SELECT current_user,has_table_privilege(current_user,'public.platform_tenants','UPDATE')
+                """, runtimeConnection))
+            {
+                await using var reader = await privileges.ExecuteReaderAsync(Token);
+                Assert.True(await reader.ReadAsync(Token));
+                Assert.Equal("auditplatform_user_admin_runtime", reader.GetString(0));
+                Assert.False(reader.GetBoolean(1));
+            }
+            await using (var forbiddenLock = new NpgsqlCommand(
+                "SELECT id FROM public.platform_tenants WHERE id=101 FOR UPDATE", runtimeConnection))
+                await Assert.ThrowsAsync<PostgresException>(() => forbiddenLock.ExecuteScalarAsync(Token));
+
+            var restrictedCreate = await runtimeService.CreateAsync(admin, 101,
+                "restricted-runtime-user", "synthetic-password", "member", Token);
+            Assert.Equal(TenantUserStatus.Success, restrictedCreate.Status);
+            Assert.NotNull(restrictedCreate.UserId);
+            await using var scopedUser = new NpgsqlCommand("""
+                SELECT u.role,m.tenant_role FROM public.users u
+                JOIN public.platform_tenant_memberships m ON m.user_id=u.id
+                WHERE u.id=$1 AND m.tenant_id=101
+                """, connection);
+            scopedUser.Parameters.AddWithValue(restrictedCreate.UserId!.Value);
+            await using var scopedReader = await scopedUser.ExecuteReaderAsync(Token);
+            Assert.True(await scopedReader.ReadAsync(Token));
+            Assert.True(scopedReader.IsDBNull(0));
+            Assert.Equal("member", scopedReader.GetString(1));
+        }
         Assert.Equal(TenantUserStatus.Conflict, (await service.CreateAsync(admin,101,"admin-b","pass","member",Token)).Status);
         Assert.Equal(TenantUserStatus.Invalid, (await service.CreateAsync(admin,101,"valid",new string('x',73),"member",Token)).Status);
         Assert.Equal(TenantUserStatus.Success, (await service.UpdateAsync(admin,101,10,"renamed-member","member",Token)).Status);
@@ -162,6 +199,29 @@ public sealed class TenantUserManagementTests(PostgresFixture fixture) : IClassF
         await using (var disabled = new WebApplicationFactory<Program>())
         using (var disabledClient = disabled.CreateClient())
             Assert.Equal(HttpStatusCode.ServiceUnavailable, (await disabledClient.GetAsync("/api/users",Token)).StatusCode);
+
+        await using (var writesDisabled = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services => services.PostConfigure<UserManagementOptions>(settings =>
+            {
+                settings.Enabled = true;
+                settings.WriteEnabled = false;
+            }));
+        }))
+        using (var client = writesDisabled.CreateClient())
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,
+                (await client.PostAsJsonAsync("/api/users", new { username="blocked", password="pass", role=(string?)null }, Token)).StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,
+                (await client.PutAsJsonAsync("/api/users/1", new { username="blocked", role=(string?)null }, Token)).StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,
+                (await client.PostAsync("/api/users/1/deactivate", null, Token)).StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,
+                (await client.PostAsync("/api/users/1/reactivate", null, Token)).StatusCode);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,
+                (await client.PutAsJsonAsync("/api/users/1/reset-password", new { password="pass" }, Token)).StatusCode);
+        }
 
         await using (var app = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
