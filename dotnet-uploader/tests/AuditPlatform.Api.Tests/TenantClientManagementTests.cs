@@ -52,6 +52,7 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
         await fixture.ApplyTenantFoundationAsync(Token);
         await fixture.ApplyEngagementFoundationAsync(Token);
         await fixture.ApplyTenantUserRolesAsync(Token);
+        await fixture.ApplyClientUserAssignmentsAsync(Token);
         await Sql("""
             INSERT INTO public.platform_tenants(id,name,tenant_type) OVERRIDING SYSTEM VALUE VALUES
                 (101,'Firm A','audit_firm'),(102,'Firm B','audit_firm'),(103,'Business','business');
@@ -78,20 +79,15 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
         Assert.Equal(ClientStatus.Forbidden,(await service.ListAsync(Session('a',3),false,null,null,0,Token)).Status);
         Assert.Equal(ClientStatus.AmbiguousTenant,(await service.ListAsync(Session('e',5),false,null,null,0,Token)).Status);
         Assert.Empty((await service.ListAsync(Session('b',2),true,null,null,0,Token)).Clients!);
-        await Sql($"""
-            INSERT INTO public.platform_audit_engagements(id,firm_tenant_id,client_id,name) OVERRIDING SYSTEM VALUE VALUES
-                (201,101,{id},'Annual audit');
-            INSERT INTO public.platform_engagement_assignments(engagement_id,firm_tenant_id,user_id,team_role) VALUES
-                (201,101,2,'internee');
-            """);
+        await Sql($"INSERT INTO public.platform_client_user_assignments(tenant_id,client_id,user_id,team_role) VALUES (101,{id},2,'internee')");
         var staff = await service.ListAsync(Session('b',2),true,null,null,0,Token);
         Assert.Equal(id,Assert.Single(staff.Clients!).Id);
         Assert.Equal(ClientStatus.Forbidden,(await service.GetAsync(Session('b',2),id,Token)).Status);
         Assert.Equal(ClientStatus.Success,(await service.SelectionAsync(Session('b',2),id,Token)).Status);
-        await Sql("UPDATE public.platform_audit_engagements SET is_active=FALSE WHERE id=201");
+        await Sql("UPDATE public.platform_client_user_assignments SET is_active=FALSE WHERE user_id=2");
         Assert.Empty((await service.ListAsync(Session('b',2),false,null,null,0,Token)).Clients!);
         Assert.Equal(ClientStatus.NotFound,(await service.SelectionAsync(Session('b',2),id,Token)).Status);
-        await Sql("UPDATE public.platform_audit_engagements SET is_active=TRUE WHERE id=201");
+        await Sql("UPDATE public.platform_client_user_assignments SET is_active=TRUE WHERE user_id=2");
         Assert.Equal(ClientStatus.NotFound,(await service.SelectionAsync(Session('b',2),b.ClientId,Token)).Status);
         var page = await service.ListAsync(Session('a',1),false,null,1,1,Token);
         Assert.Equal(2L,page.Total); Assert.Equal("Beta",Assert.Single(page.Clients!).Profile.Name);
@@ -115,7 +111,7 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
         Assert.Equal(1L,await Count($"SELECT count(*) FROM public.clients WHERE id={id} AND is_active IS TRUE"));
         Assert.Equal(0L,await Count("SELECT count(*) FROM public.sessions WHERE user_id=1 AND selected_client_id IS NOT NULL"));
         Assert.Equal(1L,await Count($"SELECT count(*) FROM public.sessions WHERE user_id=2 AND selected_client_id={id}"));
-        await Sql("UPDATE public.platform_engagement_assignments SET is_active=FALSE WHERE user_id=2");
+        await Sql("UPDATE public.platform_client_user_assignments SET is_active=FALSE WHERE user_id=2");
         Assert.Empty((await service.SelectionAsync(Session('b',2),null,Token)).Clients!);
         Assert.Equal(0L,await Count("SELECT count(*) FROM public.sessions WHERE user_id=2 AND selected_client_id IS NOT NULL"));
         Assert.Equal(ClientStatus.Success,(await service.SelectionAsync(Session('a',1),id,Token)).Status);
@@ -139,6 +135,15 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
         await using (var disabled = new WebApplicationFactory<Program>())
         using (var client = disabled.CreateClient())
             Assert.Equal(HttpStatusCode.ServiceUnavailable,(await client.GetAsync("/api/clients",Token)).StatusCode);
+        await using (var creationDisabled = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.ConfigureServices(services =>
+                services.PostConfigure<ClientManagementOptions>(o => o.Enabled = true));
+        }))
+        using (var client = creationDisabled.CreateClient())
+            Assert.Equal(HttpStatusCode.ServiceUnavailable,(await client.PostAsJsonAsync("/api/clients",
+                new { client_code="OFF", client_name="Creation disabled" },Token)).StatusCode);
         await using var app = new WebApplicationFactory<Program>().WithWebHostBuilder(builder=>
         {
             builder.UseEnvironment("Testing");
@@ -146,7 +151,7 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
             {
                 services.PostConfigure<PostgresOptions>(o=> {o.Enabled=true;o.ConnectionString=fixture.ConnectionString;});
                 services.PostConfigure<AuthenticationOptions>(o=> {o.Enabled=true;o.PublicOrigin="http://127.0.0.1:5080";});
-                services.PostConfigure<ClientManagementOptions>(o=>{o.Enabled=true;o.WriteEnabled=true;});
+                services.PostConfigure<ClientManagementOptions>(o=>{o.Enabled=true;o.CreateEnabled=true;});
             });
         });
         using var http = app.CreateClient(new WebApplicationFactoryClientOptions {HandleCookies=false});
@@ -171,9 +176,9 @@ public sealed class TenantClientManagementTests(PostgresFixture fixture) : IClas
         using (var json=JsonDocument.Parse(await current.Content.ReadAsStringAsync(Token)))
             Assert.Equal(id,json.RootElement.GetProperty("client_id").GetInt32());
         Assert.Equal(HttpStatusCode.OK,(await http.PostAsJsonAsync("/api/clients",new {client_code="HTTP",client_name="HTTP client"},Token)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK,(await http.PutAsJsonAsync($"/api/clients/{id}",new {client_code="A",client_name="Alpha API",contact_person="Contact",is_active=true},Token)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK,(await http.DeleteAsync($"/api/clients/{id}",Token)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK,(await http.PostAsync($"/api/clients/{id}/restore",null,Token)).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,(await http.PutAsJsonAsync($"/api/clients/{id}",new {client_code="A",client_name="Alpha API",contact_person="Contact",is_active=true},Token)).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,(await http.DeleteAsync($"/api/clients/{id}",Token)).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable,(await http.PostAsync($"/api/clients/{id}/restore",null,Token)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound,(await http.GetAsync($"/api/clients/{other.ClientId}",Token)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound,(await http.PostAsJsonAsync($"/api/clients/{id}/data-purge",new {},Token)).StatusCode);
         await Sql("UPDATE public.users SET is_active=FALSE WHERE id=1");

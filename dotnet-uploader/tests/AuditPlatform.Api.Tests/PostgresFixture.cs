@@ -271,6 +271,19 @@ public sealed class PostgresFixture : IAsyncLifetime
         File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations",
             "0005_tenant_user_roles.sql"), cancellationToken);
 
+    public async Task ApplyClientUserAssignmentsAsync(CancellationToken cancellationToken)
+    {
+        RequireOwnedDirectory();
+        await using var connection = await OpenControlConnectionAsync(cancellationToken);
+        var sql = await ReadClientUserAssignmentsAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public static Task<string> ReadClientUserAssignmentsAsync(CancellationToken cancellationToken) =>
+        File.ReadAllTextAsync(Path.Combine(FindSolutionDirectory(), "database", "migrations",
+            "0028_client_user_assignments.sql"), cancellationToken);
+
     public string OwnedRunDirectory => runDirectory;
     public string BinaryDirectory => binaryDirectory;
 

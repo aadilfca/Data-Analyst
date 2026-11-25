@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Tenant-scoped C# APIs, jobs, independent frontend and tests; least-privilege grants, shared tenant locks and client assignments. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Tenant-scoped C# APIs, jobs, independent frontend and tests; least-privilege grants, shared tenant locks, client assignments and gated client creation. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,6 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
+- 2026-11-25: Added tenant-admin-only C# client creation with separate least-privilege grants; client edits and deactivation remain gated. See C# tenant client creation.
 - 2026-11-25: Added tenant-scoped client assignments and Admin controls; applied development schema and runtime grants. See C# client assignments.
 - 2026-11-25: Replaced tenant-row write locks with a shared advisory-lock helper; added restricted-role user-creation regression coverage. See C# tenant lock permissions.
 - 2026-11-24: Data Bank metrics batch document counts and share bounded metadata reads. See CHANGELOG_ARCHIVE.md.

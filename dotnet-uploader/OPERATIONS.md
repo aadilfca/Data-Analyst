@@ -6,7 +6,7 @@ Build `AuditPlatform.slnx` in Release, then run `start_csharp_tray.cmd`. This op
 
 The tray expects `AuditPlatform.Api.dll` beside itself in a deployment package. The repository command sets that path to the Release build output, prefers the repository's local .NET host, and defaults to the .NET `Development` environment. The API's `UserSecretsId` lets ASP.NET load per-user development settings without putting them in Git. User Secrets are not encrypted. The C# migration has a dedicated Supabase development project (`klljugkujxxmtbmbeewn`); use its separate restricted runtime login, never the database-owner or Python `.env` credential. For Render, use its secret settings. The tray does not read Python `.env` files or transfer their credentials.
 
-The safe application defaults keep PostgreSQL and the C# shell off. `Postgres:Profile` selects `Supabase` (default) or `Local`; the existing `Postgres:ConnectionString` remains the Supabase fallback, while `Postgres:LocalConnectionString` is stored separately. The readiness gate proves database connectivity with `SELECT 1`, not that application tables or data exist. ApplicationShell requires Authentication, UserManagement and ClientManagement enabled together. User and client administration writes have separate `WriteEnabled` switches, default off; login, tenant selection, and client viewing do not require them.
+The safe application defaults keep PostgreSQL and the C# shell off. `Postgres:Profile` selects `Supabase` (default) or `Local`; the existing `Postgres:ConnectionString` remains the Supabase fallback, while `Postgres:LocalConnectionString` is stored separately. The readiness gate proves database connectivity with `SELECT 1`, not that application tables or data exist. ApplicationShell requires Authentication, UserManagement and ClientManagement enabled together. User writes, client creation, and broader client edits/deactivation have separate default-off switches; login, tenant selection, and client viewing do not require them.
 
 ## Supabase empty-schema foundation
 
@@ -29,6 +29,19 @@ $project = '.\dotnet-uploader\src\AuditPlatform.Api\AuditPlatform.Api.csproj'
 ```
 
 Rebuild Release, restart the C# tray server, and verify create, edit, deactivate, reactivate, and password reset with a test account on the development project. The API write gate returns HTTP 503 until the setting is enabled. User Secrets are local configuration and are not changed by the grant script.
+
+### C# tenant client creation
+
+On the dedicated C# development database, apply `runtime_client_admin_grants.sql` as the database owner after the core and user-administration grants. It grants only client-profile and tenant-home inserts plus client identity-sequence usage; edits, deactivation and hard deletes remain unavailable. The API requires an active tenant Admin and writes the client, its tenant home and audit event in one transaction. Do not apply this grant to Python or production databases.
+
+After the grant succeeds, enable only client creation locally and keep broader client writes off:
+
+```powershell
+& $dotnet user-secrets set 'ClientManagement:CreateEnabled' 'true' --project $project
+& $dotnet user-secrets set 'ClientManagement:WriteEnabled' 'false' --project $project
+```
+
+Rebuild Release, restart the C# tray server, and create a test client. Then use **Manage Users** to assign it to a standard user; that user should see only assigned active clients.
 
 ### C# Data Bank read-only activation
 
@@ -72,10 +85,11 @@ $project = '.\dotnet-uploader\src\AuditPlatform.Api\AuditPlatform.Api.csproj'
 & $dotnet user-secrets set 'UserManagement:Enabled' 'true' --project $project
 & $dotnet user-secrets set 'UserManagement:WriteEnabled' 'false' --project $project
 & $dotnet user-secrets set 'ClientManagement:Enabled' 'true' --project $project
+& $dotnet user-secrets set 'ClientManagement:CreateEnabled' 'false' --project $project
 & $dotnet user-secrets set 'ClientManagement:WriteEnabled' 'false' --project $project
 ```
 
-These commands do not create or migrate a database. Apply only reviewed migrations to the selected database, and use a test account that exists there. The login `codex/codex` is usable only if it was created there. Keep user/client write switches off until those administration writes are separately accepted; the runtime role has no such database writes. After configuration, rebuild Release, close/reopen the tray, choose **Start C# server**, wait for **C# server: running**, then open the app. See Microsoft's [development secret guidance](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets?view=aspnetcore-10.0).
+These commands do not create or migrate a database. Apply only reviewed migrations and grants to the selected development database, and use a test account that exists there. The login `codex/codex` is usable only if it was created there. Keep user, client-create and broader client-write switches off until each permission set is accepted. After configuration, rebuild Release, close/reopen the tray, choose **Start C# server**, wait for **C# server: running**, then open the app. See Microsoft's [development secret guidance](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets?view=aspnetcore-10.0).
 
 Migrations `0024`/`0026` and promotion of verified legacy template definitions are complete on the dedicated project. Do not repeat those steps without a fresh preview. Keep module feature switches unchanged unless separately accepted. Historical-evidence, Ledger, remaining-settings and report-ownership adoption remain separate gates; see `CHANGELOG_ARCHIVE.md`. Do not copy client transaction rows.
 

@@ -72,6 +72,7 @@ builder.Services.AddSingleton<TenantUserService>();
 builder.Services.AddSingleton<TenantClientAssignmentService>();
 builder.Services.AddOptions<ClientManagementOptions>()
     .Bind(builder.Configuration.GetSection(ClientManagementOptions.SectionName))
+    .Validate(o => !o.CreateEnabled || o.Enabled, "Client creation requires ClientManagement to be enabled.")
     .Validate(o => !o.WriteEnabled || o.Enabled, "Client administration writes require ClientManagement to be enabled.")
     .ValidateOnStart();
 builder.Services.AddSingleton<TenantClientService>();

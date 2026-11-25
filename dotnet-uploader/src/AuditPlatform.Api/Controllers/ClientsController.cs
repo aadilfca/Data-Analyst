@@ -38,13 +38,13 @@ public sealed class ClientsController(TenantClientService clients, IOptions<Clie
     }
 
     [HttpPost]
-    public Task<IActionResult> Create([FromBody] ClientInput? input, CancellationToken ct) => Save(null, input, ct);
+    public Task<IActionResult> Create([FromBody] ClientInput? input, CancellationToken ct) => Save(null, input, ct, create: true);
     [HttpPut("{id:int}")]
     public Task<IActionResult> Update(int id, [FromBody] ClientInput? input, CancellationToken ct) => Save(id, input, ct);
 
-    private async Task<IActionResult> Save(int? id, ClientInput? input, CancellationToken ct)
+    private async Task<IActionResult> Save(int? id, ClientInput? input, CancellationToken ct, bool create = false)
     {
-        if (Guard(write: true) is { } error) return error;
+        if (Guard(create: create, write: !create) is { } error) return error;
         if (!ModelState.IsValid || input?.Code is null || input.Name is null) return Invalid();
         var result = await clients.SaveAsync(Session, id,
             new(input.Code,input.Name,input.Industry,input.ContactPerson,input.Email,input.Phone,input.IsActive), ct);
@@ -66,10 +66,11 @@ public sealed class ClientsController(TenantClientService clients, IOptions<Clie
     }
 
     private VerifiedSession? Session => HttpContext.Items[typeof(VerifiedSession)] as VerifiedSession;
-    private IActionResult? Guard(bool write = false)
+    private IActionResult? Guard(bool create = false, bool write = false)
     {
         Response.Headers.CacheControl = "no-store";
         if (!options.Value.Enabled) return StatusCode(503, new { detail = "Client management is unavailable" });
+        if (create && !options.Value.CreateEnabled) return StatusCode(503, new { detail = "Client creation is disabled" });
         if (write && !options.Value.WriteEnabled) return StatusCode(503, new { detail = "Client administration changes are disabled" });
         return Session is null ? Unauthorized(new { detail = "Not authenticated" }) : null;
     }
