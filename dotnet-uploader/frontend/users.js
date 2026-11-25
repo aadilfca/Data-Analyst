@@ -32,6 +32,13 @@ const resetPasswordModal = document.getElementById('resetPasswordModal');
 const resetPasswordInput = document.getElementById('resetPasswordInput');
 const resetPasswordUserId = document.getElementById('resetPasswordUserId');
 const resetPasswordStatus = document.getElementById('resetPasswordStatus');
+const clientAssignmentOverlay = document.getElementById('clientAssignmentOverlay');
+const clientAssignmentModal = document.getElementById('clientAssignmentModal');
+const clientAssignmentList = document.getElementById('clientAssignmentList');
+const clientAssignmentStatus = document.getElementById('clientAssignmentStatus');
+const cancelClientAssignmentBtn = document.getElementById('cancelClientAssignmentBtn');
+const saveClientAssignmentBtn = document.getElementById('saveClientAssignmentBtn');
+let clientAssignmentUserId = null;
 const cancelResetPasswordBtn = document.getElementById('cancelResetPasswordBtn');
 const submitResetPasswordBtn = document.getElementById('submitResetPasswordBtn');
 
@@ -179,6 +186,21 @@ function renderUsers(users) {
         editBtn.title = 'Edit user';
         editBtn.addEventListener('click', () => openEditModal(user));
 
+        // Tenant admins already have access to every client in their firm.
+        if (user.role !== 'admin' && user.is_active) {
+            const assignBtn = document.createElement('button');
+            assignBtn.textContent = '🏢';
+            assignBtn.style.background = 'none';
+            assignBtn.style.border = 'none';
+            assignBtn.style.cursor = 'pointer';
+            assignBtn.style.fontSize = '18px';
+            assignBtn.style.marginLeft = '8px';
+            assignBtn.title = 'Assign clients';
+            assignBtn.setAttribute('aria-label', 'Assign clients to ' + user.username);
+            assignBtn.addEventListener('click', () => openClientAssignments(user));
+            tdActions.appendChild(assignBtn);
+        }
+
         // Deactivate / Reactivate
         const toggleBtn = document.createElement('button');
         if (user.is_active) {
@@ -295,6 +317,93 @@ cancelBtn.addEventListener('click', closeModal);
 modalOverlay.addEventListener('click', closeModal);
 
 function openEditModal(user) { openModal('Edit User', user); }
+
+async function openClientAssignments(user) {
+    clientAssignmentUserId = user.id;
+    clientAssignmentModal.querySelector('#clientAssignmentTitle').textContent = 'Assign Clients — ' + user.username;
+    clientAssignmentOverlay.style.display = 'block';
+    clientAssignmentModal.style.display = 'block';
+    clientAssignmentList.textContent = 'Loading clients…';
+    clientAssignmentStatus.style.display = 'none';
+    saveClientAssignmentBtn.disabled = true;
+    document.body.style.overflow = 'hidden';
+    try {
+        const res = await fetch(API_BASE + '/api/users/' + user.id + '/client-assignments');
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Failed to load client assignments');
+        clientAssignmentList.replaceChildren();
+        if (result.length === 0) {
+            clientAssignmentList.textContent = 'There are no active clients in this firm yet.';
+        }
+        result.forEach(client => {
+            const row = document.createElement('label');
+            row.style.cssText = 'display:grid;grid-template-columns:minmax(0,1fr) 150px;align-items:center;gap:12px;padding:12px;border:1px solid #e2e8f0;border-radius:8px;';
+            const choice = document.createElement('span');
+            choice.style.cssText = 'display:flex;align-items:center;gap:10px;min-width:0;';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = client.is_assigned;
+            checkbox.setAttribute('aria-label', 'Assign ' + client.client_name);
+            const label = document.createElement('span');
+            label.textContent = client.client_name + ' (' + client.client_code + ')';
+            label.style.cssText = 'overflow-wrap:anywhere;';
+            choice.append(checkbox, label);
+            const role = document.createElement('select');
+            role.setAttribute('aria-label', 'Team role for ' + client.client_name);
+            role.style.cssText = 'width:100%;padding:7px;border:1px solid #cbd5e1;border-radius:5px;';
+            role.innerHTML = '<option value="manager">Manager / Senior</option><option value="internee">Internee / Junior</option>';
+            role.value = client.team_role || 'internee';
+            role.disabled = !checkbox.checked;
+            checkbox.addEventListener('change', () => { role.disabled = !checkbox.checked; });
+            row.append(choice, role);
+            row.dataset.clientId = client.client_id;
+            clientAssignmentList.appendChild(row);
+        });
+        saveClientAssignmentBtn.disabled = false;
+    } catch (error) {
+        clientAssignmentList.textContent = '';
+        showClientAssignmentStatus('❌ ' + error.message, 'error');
+    }
+}
+
+function closeClientAssignments() {
+    clientAssignmentOverlay.style.display = 'none';
+    clientAssignmentModal.style.display = 'none';
+    document.body.style.overflow = '';
+    clientAssignmentUserId = null;
+}
+
+function showClientAssignmentStatus(message, type) {
+    clientAssignmentStatus.textContent = message;
+    clientAssignmentStatus.style.display = 'block';
+    clientAssignmentStatus.style.background = type === 'error' ? '#ffebee' : '#e8f5e9';
+    clientAssignmentStatus.style.color = type === 'error' ? '#c62828' : '#2e7d32';
+    clientAssignmentStatus.style.border = '1px solid ' + (type === 'error' ? '#ef9a9a' : '#a5d6a7');
+}
+
+cancelClientAssignmentBtn.addEventListener('click', closeClientAssignments);
+clientAssignmentOverlay.addEventListener('click', closeClientAssignments);
+saveClientAssignmentBtn.addEventListener('click', async function() {
+    if (clientAssignmentUserId === null) return;
+    const assignments = Array.from(clientAssignmentList.querySelectorAll('label[data-client-id]'))
+        .filter(row => row.querySelector('input[type="checkbox"]').checked)
+        .map(row => ({ client_id: Number(row.dataset.clientId), team_role: row.querySelector('select').value }));
+    saveClientAssignmentBtn.disabled = true;
+    try {
+        const res = await fetch(API_BASE + '/api/users/' + clientAssignmentUserId + '/client-assignments', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assignments })
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.detail || 'Failed to save client assignments');
+        showClientAssignmentStatus('✅ ' + result.message, 'success');
+        setTimeout(closeClientAssignments, 700);
+    } catch (error) {
+        showClientAssignmentStatus('❌ ' + error.message, 'error');
+        saveClientAssignmentBtn.disabled = false;
+    }
+});
 
 // ---------- CONFIRM DEACTIVATE ----------
 async function confirmDeactivate(id, username) {
@@ -515,6 +624,9 @@ document.addEventListener('keydown', function(e) {
         }
         if (resetPasswordModal.style.display === 'block') {
             closeResetPasswordModal();
+        }
+        if (clientAssignmentModal.style.display === 'block') {
+            closeClientAssignments();
         }
     }
 });

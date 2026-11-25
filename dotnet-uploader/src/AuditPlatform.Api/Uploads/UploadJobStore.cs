@@ -140,9 +140,9 @@ public sealed class UploadJobStore(PostgresTransactions transactions,UploadValid
             JOIN public.platform_tenant_client_homes h ON h.client_id=c.id AND h.tenant_id=$3
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND u.is_active IS TRUE AND m.is_active IS TRUE AND t.is_active IS TRUE
               AND s.selected_tenant_id=$3 AND s.context_version=$4 AND s.selected_client_id=$5 AND c.is_active IS TRUE
-              AND (m.tenant_role='admin' OR EXISTS(SELECT 1 FROM public.platform_engagement_assignments a
-                JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                WHERE a.firm_tenant_id=$3 AND a.user_id=$2 AND e.client_id=$5 AND a.is_active IS TRUE AND e.is_active IS TRUE AND a.team_role IN('manager','internee')))
+              AND (m.tenant_role='admin' OR EXISTS(SELECT 1 FROM public.platform_client_user_assignments a
+                WHERE a.tenant_id=$3 AND a.user_id=$2 AND a.client_id=$5
+                  AND a.is_active IS TRUE AND a.team_role IN('manager','internee')))
             """);
         c.Parameters.AddWithValue(actor.Token);c.Parameters.AddWithValue(actor.UserId);c.Parameters.AddWithValue(j.Tenant);c.Parameters.AddWithValue(actor.ContextVersion);c.Parameters.AddWithValue(j.Client);
         if(await c.ExecuteScalarAsync(ct) is null) throw new ValidationPlanRejected("plan_access_denied");

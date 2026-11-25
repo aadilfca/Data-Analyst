@@ -119,10 +119,9 @@ public sealed class TenantMappingService(PostgresTransactions transactions,Postg
                 // permission. Assignment changes outside this app affect later
                 // requests; an already-authorized transaction may finish.
                 await using var assignment=db.CreateCommand("""
-                    SELECT a.user_id FROM public.platform_engagement_assignments a
-                    JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                    WHERE a.firm_tenant_id=$1 AND a.user_id=$2 AND e.client_id=$3
-                        AND a.team_role IN ('manager','internee') AND a.is_active IS TRUE AND e.is_active IS TRUE
+                    SELECT a.user_id FROM public.platform_client_user_assignments a
+                    WHERE a.tenant_id=$1 AND a.user_id=$2 AND a.client_id=$3
+                        AND a.team_role IN ('manager','internee') AND a.is_active IS TRUE
                     """);
                 assignment.Parameters.AddWithValue(actor.Tenant); assignment.Parameters.AddWithValue(actor.User); assignment.Parameters.AddWithValue(client);
                 if(await assignment.ExecuteScalarAsync(token) is null) return new MappingResult(MappingStatus.Forbidden);

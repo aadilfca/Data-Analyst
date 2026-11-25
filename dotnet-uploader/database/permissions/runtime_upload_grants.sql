@@ -38,7 +38,7 @@ BEGIN
         'platform_tenant_saved_mappings','platform_tenant_templates','platform_tenant_columns',
         'template_column_mappings','master_columns','sessions','users','platform_tenants',
         'platform_tenant_memberships','platform_tenant_client_homes','clients',
-        'platform_audit_engagements','platform_engagement_assignments'
+        'platform_audit_engagements','platform_engagement_assignments','platform_client_user_assignments'
     ] LOOP
         IF to_regclass(format('public.%I', required_table)) IS NULL THEN
             RAISE EXCEPTION 'A required C# upload table is missing; no changes applied';
@@ -75,14 +75,29 @@ BEGIN
         RAISE EXCEPTION 'Saved-mapping review table has an unexpected layout; no changes applied';
     END IF;
 
+    -- User administration is separately approved and uses only these narrow
+    -- column grants. Permit them here so this script can be safely rerun after
+    -- the user-admin grant plan; continue to reject table-wide or extra writes.
     IF (pg_catalog.has_any_column_privilege(runtime_oid,'public.clients','INSERT,UPDATE')
-       OR pg_catalog.has_table_privilege(runtime_oid,'public.clients','DELETE'))
-       OR pg_catalog.has_table_privilege(runtime_oid,'public.users','INSERT,DELETE')
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.clients','INSERT,UPDATE,DELETE'))
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.users','INSERT,UPDATE,DELETE')
        OR EXISTS (SELECT 1 FROM information_schema.column_privileges
                   WHERE grantee='audit_platform_runtime' AND table_schema='public' AND table_name='users'
-                    AND privilege_type='UPDATE' AND column_name<>'last_login')
-       OR (pg_catalog.has_any_column_privilege(runtime_oid,'public.platform_tenant_memberships','INSERT,UPDATE')
-           OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_tenant_memberships','DELETE'))
+                    AND privilege_type IN ('INSERT','UPDATE')
+                    AND NOT ((privilege_type='INSERT' AND column_name IN ('username','password_hash','is_active'))
+                          OR (privilege_type='UPDATE' AND column_name IN ('last_login','username','password_hash'))))
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_tenant_memberships','INSERT,UPDATE,DELETE')
+       OR EXISTS (SELECT 1 FROM information_schema.column_privileges
+                  WHERE grantee='audit_platform_runtime' AND table_schema='public'
+                    AND table_name='platform_tenant_memberships' AND privilege_type IN ('INSERT','UPDATE')
+                    AND NOT ((privilege_type='INSERT' AND column_name IN ('tenant_id','user_id','tenant_role'))
+                          OR (privilege_type='UPDATE' AND column_name IN ('tenant_role','is_active'))))
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_client_user_assignments','INSERT,UPDATE,DELETE')
+       OR EXISTS (SELECT 1 FROM information_schema.column_privileges
+                  WHERE grantee='audit_platform_runtime' AND table_schema='public'
+                    AND table_name='platform_client_user_assignments' AND privilege_type IN ('INSERT','UPDATE')
+                    AND NOT ((privilege_type='INSERT' AND column_name IN ('tenant_id','client_id','user_id','team_role'))
+                          OR (privilege_type='UPDATE' AND column_name IN ('team_role','is_active'))))
        OR (pg_catalog.has_any_column_privilege(runtime_oid,'public.platform_tenant_columns','INSERT,UPDATE')
            OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_tenant_columns','DELETE'))
        OR (pg_catalog.has_any_column_privilege(runtime_oid,'public.platform_tenant_templates','INSERT,UPDATE')
@@ -196,12 +211,28 @@ BEGIN
        OR NOT pg_catalog.has_column_privilege(runtime_oid,'public.platform_upload_staging','request_id','INSERT')
        OR NOT pg_catalog.has_table_privilege(runtime_oid,'public.platform_upload_jobs','SELECT,INSERT,UPDATE,DELETE')
        OR NOT pg_catalog.has_column_privilege(runtime_oid,'public.platform_engagement_assignments','team_role','SELECT')
+       OR NOT pg_catalog.has_column_privilege(runtime_oid,'public.platform_client_user_assignments','team_role','SELECT')
+       OR NOT pg_catalog.has_column_privilege(runtime_oid,'public.platform_client_user_assignments','is_active','SELECT')
        OR (pg_catalog.has_any_column_privilege(runtime_oid,'public.clients','INSERT,UPDATE')
            OR pg_catalog.has_table_privilege(runtime_oid,'public.clients','DELETE'))
-       OR pg_catalog.has_table_privilege(runtime_oid,'public.users','INSERT,DELETE')
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.users','INSERT,UPDATE,DELETE')
        OR EXISTS (SELECT 1 FROM information_schema.column_privileges
                   WHERE grantee='audit_platform_runtime' AND table_schema='public' AND table_name='users'
-                    AND privilege_type='UPDATE' AND column_name<>'last_login')
+                    AND privilege_type IN ('INSERT','UPDATE')
+                    AND NOT ((privilege_type='INSERT' AND column_name IN ('username','password_hash','is_active'))
+                          OR (privilege_type='UPDATE' AND column_name IN ('last_login','username','password_hash'))))
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_tenant_memberships','INSERT,UPDATE,DELETE')
+       OR EXISTS (SELECT 1 FROM information_schema.column_privileges
+                  WHERE grantee='audit_platform_runtime' AND table_schema='public'
+                    AND table_name='platform_tenant_memberships' AND privilege_type IN ('INSERT','UPDATE')
+                    AND NOT ((privilege_type='INSERT' AND column_name IN ('tenant_id','user_id','tenant_role'))
+                          OR (privilege_type='UPDATE' AND column_name IN ('tenant_role','is_active'))))
+       OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_client_user_assignments','INSERT,UPDATE,DELETE')
+       OR EXISTS (SELECT 1 FROM information_schema.column_privileges
+                  WHERE grantee='audit_platform_runtime' AND table_schema='public'
+                    AND table_name='platform_client_user_assignments' AND privilege_type IN ('INSERT','UPDATE')
+                    AND NOT ((privilege_type='INSERT' AND column_name IN ('tenant_id','client_id','user_id','team_role'))
+                          OR (privilege_type='UPDATE' AND column_name IN ('team_role','is_active'))))
        OR (pg_catalog.has_any_column_privilege(runtime_oid,'public.platform_tenant_columns','INSERT,UPDATE')
            OR pg_catalog.has_table_privilege(runtime_oid,'public.platform_tenant_columns','DELETE'))
        OR (pg_catalog.has_any_column_privilege(runtime_oid,'public.platform_tenant_templates','INSERT,UPDATE')

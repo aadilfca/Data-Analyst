@@ -544,9 +544,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
             JOIN public.platform_tenant_memberships m ON m.tenant_id=$3 AND m.user_id=u.id AND m.is_active IS TRUE
             WHERE v.id=$5 AND v.status!='Cancelled'
               AND (m.tenant_role='admin' OR EXISTS(
-                SELECT 1 FROM public.platform_engagement_assignments a
-                JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                WHERE a.user_id=u.id AND a.firm_tenant_id=$3 AND e.client_id=c.id AND a.is_active IS TRUE AND e.is_active IS TRUE))
+                SELECT 1 FROM public.platform_client_user_assignments a
+                WHERE a.user_id=u.id AND a.tenant_id=$3 AND a.client_id=c.id AND a.is_active IS TRUE))
             """ + (writing ? " FOR UPDATE OF v,s" : ""));
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(session.TenantId.Value); command.Parameters.AddWithValue(session.ContextVersion); command.Parameters.AddWithValue(sessionId);
@@ -645,9 +644,8 @@ public sealed class VerificationSessionService(PostgresTransactions transactions
             WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND s.selected_client_id=$4
               AND s.selected_tenant_id=$3 AND s.context_version=$5 AND c.id=$4
               AND (m.tenant_role='admin' OR EXISTS(
-                SELECT 1 FROM public.platform_engagement_assignments a
-                JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                WHERE a.user_id=u.id AND a.firm_tenant_id=$3 AND e.client_id=c.id AND a.is_active IS TRUE AND e.is_active IS TRUE))
+                SELECT 1 FROM public.platform_client_user_assignments a
+                WHERE a.user_id=u.id AND a.tenant_id=$3 AND a.client_id=c.id AND a.is_active IS TRUE))
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);
         command.Parameters.AddWithValue(session.TenantId.Value); command.Parameters.AddWithValue(clientId); command.Parameters.AddWithValue(session.ContextVersion);

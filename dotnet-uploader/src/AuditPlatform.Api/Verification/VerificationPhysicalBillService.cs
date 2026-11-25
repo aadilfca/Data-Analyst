@@ -55,9 +55,8 @@ public sealed class VerificationPhysicalBillService(PostgresTransactions transac
                 JOIN public.clients c ON c.id=s.selected_client_id AND c.is_active IS TRUE
                 JOIN public.platform_tenant_client_homes h ON h.client_id=c.id AND h.tenant_id=$3
                 WHERE s.token=$1 AND s.user_id=$2 AND s.expiry>now() AND s.selected_tenant_id=$3 AND s.context_version=$4
-                  AND (m.tenant_role='admin' OR EXISTS(SELECT 1 FROM public.platform_engagement_assignments a
-                    JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                    WHERE a.user_id=u.id AND a.firm_tenant_id=$3 AND e.client_id=c.id AND a.is_active IS TRUE AND e.is_active IS TRUE))
+                  AND (m.tenant_role='admin' OR EXISTS(SELECT 1 FROM public.platform_client_user_assignments a
+                    WHERE a.user_id=u.id AND a.tenant_id=$3 AND a.client_id=c.id AND a.is_active IS TRUE))
                 """))
             { auth.Parameters.AddWithValue(session.Token); auth.Parameters.AddWithValue(session.UserId); auth.Parameters.AddWithValue(session.TenantId.Value); auth.Parameters.AddWithValue(session.ContextVersion); var value = await auth.ExecuteScalarAsync(inner); selectedClient = value is int id ? id : null; }
             if (selectedClient is null) return new VerificationRuntimeResult("unauthenticated", Code: "session_expired_or_context_changed");

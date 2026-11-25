@@ -69,6 +69,7 @@ builder.Services.AddSingleton<AuthenticationService>();
 builder.Services.AddSingleton<TenantContextResolver>();
 builder.Services.AddSingleton<EngagementAccessResolver>();
 builder.Services.AddSingleton<TenantUserService>();
+builder.Services.AddSingleton<TenantClientAssignmentService>();
 builder.Services.AddOptions<ClientManagementOptions>()
     .Bind(builder.Configuration.GetSection(ClientManagementOptions.SectionName))
     .Validate(o => !o.WriteEnabled || o.Enabled, "Client administration writes require ClientManagement to be enabled.")

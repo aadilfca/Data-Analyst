@@ -31,8 +31,8 @@ public sealed class EngagementAccessResolver(PostgresTransactions transactions)
                 JOIN public.platform_tenant_client_homes h
                   ON h.client_id=e.client_id AND h.tenant_id=e.firm_tenant_id
                 JOIN public.clients c ON c.id=e.client_id
-                JOIN public.platform_engagement_assignments a
-                  ON a.engagement_id=e.id AND a.firm_tenant_id=t.id AND a.user_id=u.id
+                JOIN public.platform_client_user_assignments a
+                  ON a.tenant_id=t.id AND a.client_id=e.client_id AND a.user_id=u.id
                 WHERE s.token=$1 AND s.user_id=$2 AND t.id=$3 AND e.id=$4
                   AND s.expiry > now() AND u.is_active IS TRUE
                   AND m.is_active IS TRUE AND t.is_active IS TRUE

@@ -9,11 +9,13 @@ namespace AuditPlatform.Api.Controllers;
 // Disabled by default. A single active tenant membership is required until
 // the application has an explicit, server-validated tenant picker.
 [Route("api/users")]
-public sealed class UsersController(TenantUserService users, IOptions<UserManagementOptions> options) : ControllerBase
+public sealed class UsersController(TenantUserService users, TenantClientAssignmentService assignments,
+    IOptions<UserManagementOptions> options) : ControllerBase
 {
     public sealed record UserInput(string? Username, string? Password, string? Role);
     public sealed record EditInput(string? Username, string? Role);
     public sealed record PasswordInput(string? Password);
+    public sealed record ClientAssignmentsInput(IReadOnlyList<ClientAssignmentInput>? Assignments);
 
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken cancellationToken,
@@ -91,6 +93,38 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
         return result.Status == TenantUserStatus.Success ? Ok(new { message = "Password reset successfully" }) : Error(result.Status);
     }
 
+    [HttpGet("{userId:int}/client-assignments")]
+    public async Task<IActionResult> ListClientAssignments(int userId, CancellationToken cancellationToken)
+    {
+        var selection = await ContextAsync(cancellationToken);
+        if (selection.Error is not null) return selection.Error;
+        var result = await assignments.ListAsync(selection.Session, selection.TenantId, userId, cancellationToken);
+        if (result.Status != ClientAssignmentStatus.Success) return Error(result.Status);
+        Response.Headers.CacheControl = "no-store";
+        return Ok(result.Assignments.Select(assignment => new
+        {
+            client_id = assignment.ClientId,
+            client_code = assignment.ClientCode,
+            client_name = assignment.ClientName,
+            is_assigned = assignment.IsAssigned,
+            team_role = assignment.TeamRole
+        }));
+    }
+
+    [HttpPut("{userId:int}/client-assignments")]
+    public async Task<IActionResult> SaveClientAssignments(int userId,
+        [FromBody] ClientAssignmentsInput? input, CancellationToken cancellationToken)
+    {
+        if (!options.Value.WriteEnabled) return WritesUnavailable();
+        var selection = await ContextAsync(cancellationToken);
+        if (selection.Error is not null) return selection.Error;
+        if (!ModelState.IsValid || input?.Assignments is null) return InvalidRequest("body", "assignments");
+        var result = await assignments.SaveAsync(selection.Session, selection.TenantId, userId,
+            input.Assignments, cancellationToken);
+        return result == ClientAssignmentStatus.Success
+            ? Ok(new { message = "Client assignments saved successfully" }) : Error(result);
+    }
+
     private async Task<(VerifiedSession? Session, int TenantId, IActionResult? Error)> ContextAsync(CancellationToken cancellationToken)
     {
         if (!options.Value.Enabled) return (null, 0, StatusCode(503, new { detail = "User management is unavailable" }));
@@ -132,5 +166,13 @@ public sealed class UsersController(TenantUserService users, IOptions<UserManage
         TenantUserStatus.SharedIdentity => Conflict(new { detail = "This account belongs to multiple tenants and needs separate administration" }),
         TenantUserStatus.AmbiguousTenant => Conflict(new { detail = "Tenant selection is required" }),
         _ => StatusCode(503, new { detail = "User management is unavailable" })
+    };
+
+    private IActionResult Error(ClientAssignmentStatus status) => status switch
+    {
+        ClientAssignmentStatus.Forbidden => StatusCode(403, new { detail = "Admin access required" }),
+        ClientAssignmentStatus.NotFound => NotFound(new { detail = "Active standard user not found" }),
+        ClientAssignmentStatus.Invalid => BadRequest(new { detail = "Invalid client assignment details" }),
+        _ => StatusCode(503, new { detail = "Client assignment service is unavailable" })
     };
 }

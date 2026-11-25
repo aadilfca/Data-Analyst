@@ -100,9 +100,8 @@ public sealed class DataBankService(PostgresReadSnapshot snapshots, IOptions<Dat
               AND s.expiry>now() AND u.is_active IS TRUE AND m.is_active IS TRUE AND t.is_active IS TRUE AND c.is_active IS TRUE
               AND (NOT $6 OR m.tenant_role='admin')
               AND (m.tenant_role='admin' OR (t.tenant_type='audit_firm' AND EXISTS (
-                SELECT 1 FROM public.platform_audit_engagements e JOIN public.platform_engagement_assignments a
-                ON a.engagement_id=e.id AND a.firm_tenant_id=e.firm_tenant_id
-                WHERE e.client_id=c.id AND e.firm_tenant_id=t.id AND e.is_active IS TRUE
+                SELECT 1 FROM public.platform_client_user_assignments a
+                WHERE a.client_id=c.id AND a.tenant_id=t.id
                   AND a.user_id=u.id AND a.is_active IS TRUE AND a.team_role IN ('manager','internee'))))
             """);
         command.Parameters.AddWithValue(session.Token); command.Parameters.AddWithValue(session.UserId);

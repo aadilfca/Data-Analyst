@@ -1,13 +1,19 @@
 -- Core runtime grants for login, tenant selection, user/client reads, and logs.
--- Execute only through a separately approved owner session after migrations 0001-0007.
--- Creates the runtime login without a password, then grants only core app access.
+-- Execute only through a separately approved owner session after the required C# migrations, including 0028.
+-- Creates the runtime login without a password when absent, then grants only core app access.
 -- Set its password separately with psql's interactive `\password` command.
 -- No module writes, transaction access, default privileges, or schema ownership are granted.
 
 BEGIN;
 
--- No password is embedded in SQL or retained in query history.
-CREATE ROLE audit_platform_runtime LOGIN NOINHERIT;
+-- No password is embedded in SQL or retained in query history. Reapplication
+-- must preserve the separately managed password on an existing runtime login.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='audit_platform_runtime') THEN
+        EXECUTE 'CREATE ROLE audit_platform_runtime LOGIN NOINHERIT';
+    END IF;
+END $$;
 
 DO $$
 DECLARE
@@ -84,6 +90,14 @@ GRANT SELECT (id, firm_tenant_id, client_id, is_active)
     ON TABLE public.platform_audit_engagements TO audit_platform_runtime;
 GRANT SELECT (engagement_id, firm_tenant_id, user_id, is_active)
     ON TABLE public.platform_engagement_assignments TO audit_platform_runtime;
+GRANT SELECT (tenant_id, client_id, user_id, team_role, is_active)
+    ON TABLE public.platform_client_user_assignments TO audit_platform_runtime;
+ALTER TABLE public.platform_client_user_assignments ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS audit_platform_runtime_client_assignments
+    ON public.platform_client_user_assignments;
+CREATE POLICY audit_platform_runtime_client_assignments
+    ON public.platform_client_user_assignments TO audit_platform_runtime
+    USING (TRUE) WITH CHECK (TRUE);
 
 -- Audited core events and sanitized diagnostics. These grants do not expose log reads.
 GRANT INSERT ("user", action, module, details, event_id, operation_id,

@@ -47,9 +47,8 @@ internal static class WorkspaceReadScope
             JOIN public.platform_tenant_client_homes h ON h.client_id=c.id AND h.tenant_id=$1
             JOIN public.platform_tenants t ON t.id=h.tenant_id
             WHERE c.is_active IS TRUE AND ($3 OR (t.tenant_type='audit_firm' AND EXISTS (
-                SELECT 1 FROM public.platform_audit_engagements e JOIN public.platform_engagement_assignments a
-                ON a.engagement_id=e.id AND a.firm_tenant_id=e.firm_tenant_id
-                WHERE e.client_id=c.id AND e.firm_tenant_id=$1 AND e.is_active IS TRUE
+                SELECT 1 FROM public.platform_client_user_assignments a
+                WHERE a.client_id=c.id AND a.tenant_id=$1
                   AND a.user_id=$2 AND a.is_active IS TRUE AND a.team_role IN ('manager','internee')))))
         """;
     internal static void Parameters(Npgsql.NpgsqlCommand command, Actor actor)

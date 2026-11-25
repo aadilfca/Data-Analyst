@@ -27,9 +27,8 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
     private const string Columns = "c.id,c.client_code,c.client_name,c.industry,c.contact_person,c.email,c.phone,c.is_active,c.created_at";
     private const string Scope = """
         h.tenant_id=$1 AND ($2='admin' OR (c.is_active IS TRUE AND EXISTS (
-            SELECT 1 FROM public.platform_audit_engagements e
-            JOIN public.platform_engagement_assignments a ON a.engagement_id=e.id AND a.firm_tenant_id=e.firm_tenant_id
-            WHERE e.firm_tenant_id=h.tenant_id AND e.client_id=c.id AND e.is_active IS TRUE
+            SELECT 1 FROM public.platform_client_user_assignments a
+            WHERE a.tenant_id=h.tenant_id AND a.client_id=c.id
               AND a.user_id=$3 AND a.is_active IS TRUE)))
         """;
 
@@ -109,11 +108,9 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
                 CROSS JOIN authorized a
                 WHERE h.tenant_id=a.tenant_id
                   AND (a.tenant_role='admin' OR (c.is_active IS TRUE AND EXISTS (
-                      SELECT 1 FROM public.platform_audit_engagements e
-                      JOIN public.platform_engagement_assignments ea
-                        ON ea.engagement_id=e.id AND ea.firm_tenant_id=e.firm_tenant_id
-                      WHERE e.firm_tenant_id=a.tenant_id AND e.client_id=c.id AND e.is_active IS TRUE
-                        AND ea.user_id=a.user_id AND ea.is_active IS TRUE)))
+                      SELECT 1 FROM public.platform_client_user_assignments ca
+                      WHERE ca.tenant_id=a.tenant_id AND ca.client_id=c.id
+                        AND ca.user_id=a.user_id AND ca.is_active IS TRUE)))
                   AND ($5 OR c.is_active IS TRUE)
                   AND ($6::text IS NULL OR c.client_code ILIKE $6 OR c.client_name ILIKE $6 OR c.industry ILIKE $6)
                   AND ($7::integer IS NULL OR $7 BETWEEN 1 AND 200) AND $8>=0
@@ -264,10 +261,9 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
             if (client is not null && actor.Role != "admin")
             {
                 await using var assignment = db.CreateCommand("""
-                    SELECT a.user_id FROM public.platform_engagement_assignments a
-                    JOIN public.platform_audit_engagements e ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                    WHERE a.user_id=$1 AND a.firm_tenant_id=$2 AND e.client_id=$3
-                      AND a.is_active IS TRUE AND e.is_active IS TRUE
+                    SELECT a.user_id FROM public.platform_client_user_assignments a
+                    WHERE a.user_id=$1 AND a.tenant_id=$2 AND a.client_id=$3
+                      AND a.is_active IS TRUE
                     """);
                 assignment.Parameters.AddWithValue(actor.UserId); assignment.Parameters.AddWithValue(actor.TenantId);
                 assignment.Parameters.AddWithValue(client.Id);
@@ -308,11 +304,9 @@ public sealed class TenantClientService(PostgresTransactions transactions, Postg
                    c.id,c.client_code,c.client_name,c.industry,c.contact_person,c.email,c.phone,c.is_active,c.created_at,
                    (c.id IS NOT NULL AND h.client_id IS NOT NULL AND c.is_active IS TRUE
                     AND (a.tenant_role='admin' OR EXISTS (
-                        SELECT 1 FROM public.platform_engagement_assignments ea
-                        JOIN public.platform_audit_engagements e
-                          ON e.id=ea.engagement_id AND e.firm_tenant_id=ea.firm_tenant_id
-                        WHERE ea.user_id=a.user_id AND ea.firm_tenant_id=a.tenant_id
-                          AND e.client_id=c.id AND ea.is_active IS TRUE AND e.is_active IS TRUE))) AS client_allowed
+                        SELECT 1 FROM public.platform_client_user_assignments ca
+                        WHERE ca.user_id=a.user_id AND ca.tenant_id=a.tenant_id
+                          AND ca.client_id=c.id AND ca.is_active IS TRUE))) AS client_allowed
             FROM authorized a
             LEFT JOIN public.clients c ON c.id=COALESCE($5,a.selected_client_id)
             LEFT JOIN public.platform_tenant_client_homes h

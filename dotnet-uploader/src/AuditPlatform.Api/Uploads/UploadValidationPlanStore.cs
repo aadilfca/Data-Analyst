@@ -85,10 +85,9 @@ public sealed class UploadValidationPlanStore(PostgresTransactions transactions,
         if(role!="admin")
         {
             await using var assignment=db.CreateCommand("""
-                SELECT a.user_id FROM public.platform_engagement_assignments a JOIN public.platform_audit_engagements e
-                ON e.id=a.engagement_id AND e.firm_tenant_id=a.firm_tenant_id
-                WHERE a.firm_tenant_id=$1 AND a.user_id=$2 AND e.client_id=$3 AND a.is_active IS TRUE AND e.is_active IS TRUE
-                  AND a.team_role IN('manager','internee')
+                SELECT a.user_id FROM public.platform_client_user_assignments a
+                WHERE a.tenant_id=$1 AND a.user_id=$2 AND a.client_id=$3
+                  AND a.is_active IS TRUE AND a.team_role IN('manager','internee')
                 """);
             assignment.Parameters.AddWithValue(session.TenantId.Value);assignment.Parameters.AddWithValue(session.UserId);assignment.Parameters.AddWithValue(client);
             if(await assignment.ExecuteScalarAsync(token) is null) throw new ValidationPlanRejected("plan_access_denied");
