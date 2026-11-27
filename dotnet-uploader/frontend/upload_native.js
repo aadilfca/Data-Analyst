@@ -9,7 +9,8 @@
     const controllers = new Set();
     const state = { generation: 0, client: null, template: null, catalog: [], columns: [], file: null,
         staging: null, sheet: '', context: null, mappings: [], headers: [], excluded: new Set(), forced: new Set(),
-        page: 1, pages: 1, totalRows: 0, previewRows: null, rowPageCache: new Map(), rowPageLoads: new Map(), pageBusy: false, pageRequest: 0, busy: false, review: null, coverage: null, plan: null, pending: null,
+        page: 1, pages: 1, totalRows: 0, previewRows: null, rowPageCache: new Map(), rowPageLoads: new Map(),
+        datePreviewCache: new Map(), datePreviewRequests: new Map(), pageBusy: false, pageRequest: 0, busy: false, review: null, coverage: null, plan: null, pending: null,
         job: null, handle: null, receipt: null, timer: null, pollFailures: 0, issuePage: 1 };
     const cacheKey = 'native-upload-handle-v1';
     let notice, reviewPanel, jobPanel, receiptPanel, detailPanel;
@@ -74,8 +75,8 @@
         const output = new Uint8Array(total); let offset = 0;
         parts.forEach(part => { output.set(part, offset); offset += part.length; }); return output;
     }
-    async function request(path, { method = 'GET', body, headers = {}, timeout = 75000, maximum = 1048576, binary = false } = {}) {
-        const controller = new AbortController(); controllers.add(controller);
+    async function request(path, { method = 'GET', body, headers = {}, timeout = 75000, maximum = 1048576, binary = false, abortOnInvalidate = true, controller: suppliedController } = {}) {
+        const controller = suppliedController || new AbortController(); if (abortOnInvalidate) controllers.add(controller);
         const timer = setTimeout(() => controller.abort(), timeout);
         try {
             const options = { method, cache: 'no-store', credentials: 'same-origin', signal: controller.signal, headers: { ...headers } };
@@ -95,7 +96,7 @@
         } catch (error) {
             if (error.name === 'AbortError') throw new Error('The request was interrupted or timed out. Check its status before trying again.');
             throw error;
-        } finally { clearTimeout(timer); controllers.delete(controller); }
+        } finally { clearTimeout(timer); if (abortOnInvalidate) controllers.delete(controller); }
     }
     function requireOk(result) { if (!result.ok) throw new Error(errorText(result.data, result.status)); return result.data; }
     function query() {
@@ -152,6 +153,22 @@
         // Numeric tokens remain strings; never pass financial evidence through Number().
         return cell?.numberToken ?? cell?.text ?? cell?.dateTime ?? cell?.time ?? (cell?.boolean === undefined || cell?.boolean === null ? '' : String(cell.boolean));
     }
+    function mappedKeyPosition() {
+        const mapping = state.mappings.find(item => item.role === 'document_id') || state.mappings[0];
+        return Number(mapping?.sourcePosition) || 0;
+    }
+    // Reapply the server's visual key-row hint from cached cells after a local remap.
+    function rowIsFlagged(row) {
+        const key = mappedKeyPosition();
+        if (key <= 0) return false;
+        const identity = row.cells?.find(cell => Number(cell.column) === key);
+        if (!identity) return true;
+        const kind = typeof identity.kind === 'string' ? identity.kind.toLowerCase() : identity.kind;
+        if (kind === 0 || kind === 'blank') return true;
+        if (kind !== 1 && kind !== 'text') return false;
+        const text = String(identity.text ?? '');
+        return !text.trim() || text.toLowerCase().includes('total');
+    }
     function setPageLoading(loading, page = state.page) {
         const panel = $('rowExclusionContainer'), status = $('rowExclusionLoading');
         if (!panel || !status) return;
@@ -190,6 +207,8 @@
     function clearSource() {
         invalidate(); state.file = null; state.staging = null; state.context = null; state.mappings = []; state.headers = []; state.previewRows = null;
         state.excluded.clear(); state.forced.clear(); state.sheet = ''; state.page = 1; state.pages = 1; state.totalRows = 0; state.rowPageCache.clear();
+        state.datePreviewRequests.forEach(entry => entry.controller.abort());
+        state.datePreviewCache.clear(); state.datePreviewRequests.clear();
         $('sheetSelector').replaceChildren(); $('mappingBody').replaceChildren(); $('rowExclusionBody').replaceChildren();
         ['mappingPanel', 'leftPanel', 'modeActions', 'sheetField', 'fileInfo', 'dateFormatGroup', 'rowExclusionContainer'].forEach(id => $(id).style.display = 'none');
         ['uploadCoverageStart', 'uploadCoverageEnd', 'sourceControlRow'].forEach(id => $(id).value = '');
@@ -249,6 +268,7 @@
         await prepare();
     }
     async function prepare() {
+        cancelObsoleteDatePreviewRequests(null);
         invalidate(); const generation = state.generation; state.context = null; state.page = 1; state.pages = 1; state.totalRows = 0; state.previewRows = null; state.rowPageCache.clear();
         state.excluded.clear(); state.forced.clear();
         $('mappingPanel').style.display = 'block'; $('leftPanel').style.display = 'block';
@@ -291,18 +311,19 @@
             const select = node('select', null, { 'aria-label': `${mapping.name}: Excel column`, 'data-column-id': mapping.columnId });
             select.addEventListener('change', () => {
                 invalidate(); mapping.sourcePosition = select.value ? Number(select.value) : null;
-                refreshMappingDropdownOptions();
-                state.excluded.clear(); state.forced.clear(); state.page = 1; state.previewRows = null; state.rowPageCache.clear(); controls();
+                refreshMappingDropdownOptions(); updateMappingCount();
+                state.excluded.clear(); state.forced.clear(); state.page = 1;
+                controls();
                 const generation = state.generation;
-                void guarded(select, async () => {
-                    await loadPreview(generation);
-                    if (!state.previewRows) prefetchRowPages(1, 1, generation, 1);
-                    await dates();
-                });
+                void rows(1).catch(error => { if (generation === state.generation) message(error.message, 'error'); });
+                if (mapping.type === 'Date' || mapping.role === 'document_date') void dates({ background: true });
             });
             td.append(select); tr.append(td, node('td', mapping.type), node('td', mapping.compare ? 'Compared' : 'Informational')); $('mappingBody').append(tr);
         });
         refreshMappingDropdownOptions();
+        updateMappingCount();
+    }
+    function updateMappingCount() {
         $('mappingCount').textContent = `${state.mappings.filter(m => m.sourcePosition !== null).length}/${state.mappings.length} columns mapped`;
     }
     function rowPageKey(page) { return `${state.context.sha256}:${state.sheet}:${page}`; }
@@ -379,7 +400,7 @@
                 else { check.checked = true; message('At most 10,000 explicit row choices are supported.', 'error'); }
                 $('rowExclusionCounter').textContent = `${state.totalRows - state.excluded.size} of ${state.totalRows} physical rows selected; validation determines eligible detail rows`;
                 controls();
-            }); td.append(check); tr.append(td, node('td', String(row.number) + (row.flagged ? ' ⚠' : '')));
+            }); td.append(check); tr.append(td, node('td', String(row.number) + (rowIsFlagged(row) ? ' ⚠' : '')));
             state.headers.forEach(header => tr.append(node('td', cellValue(row.cells.find(c => c.column === header.position)), { class: 'native-upload-number' })));
             pageRows.append(tr);
         });
@@ -420,16 +441,87 @@
             }
         }
     }
-    async function dates() {
-        if (!state.context) return; const generation = state.generation;
-        const data = requireOk(await request(filePath('prepare'), { method: 'POST', body: source('dates') }));
-        if (generation !== state.generation) return;
-        $('dateFormatPreview').replaceChildren(...(data.samples || []).map(sample => node('span', `Row ${sample.row}: ${cellValue(sample.source)} → ${sample.parsed || sample.error || 'blank'}`)));
-        $('dateFormatPreview').style.display = 'flex';
+    // Date guidance depends on date mappings and format, not unrelated text-column choices.
+    function datePreviewKey() {
+        if (!state.context) return null;
+        const dateMappings = state.mappings.filter(mapping => mapping.type === 'Date' && mapping.sourcePosition != null)
+            .map(mapping => [mapping.columnId, Number(mapping.sourcePosition)])
+            .sort((a, b) => a[0] - b[0]);
+        const documentDate = state.mappings.find(mapping => mapping.role === 'document_date');
+        return JSON.stringify({ file: state.file, sha256: state.context.sha256, sheet: state.sheet,
+            configurationKey: state.context.configurationKey, mappingRevision: state.context.mappingRevision,
+            dateMappings, documentDate: documentDate ? [documentDate.columnId, documentDate.sourcePosition] : null,
+            hasFooting: state.mappings.some(mapping => mapping.role === 'footing'),
+            delimiter: $('dateDelimiterDropdown').value, order: $('dateOrderDropdown').value });
+    }
+    function readDatePreviewCache(key) {
+        if (!state.datePreviewCache.has(key)) return null;
+        const cached = state.datePreviewCache.get(key);
+        state.datePreviewCache.delete(key); state.datePreviewCache.set(key, cached);
+        return cached;
+    }
+    function storeDatePreviewCache(key, result) {
+        state.datePreviewCache.delete(key); state.datePreviewCache.set(key, result);
+        while (state.datePreviewCache.size > 8) state.datePreviewCache.delete(state.datePreviewCache.keys().next().value);
+    }
+    function cancelObsoleteDatePreviewRequests(key) {
+        for (const [pendingKey, entry] of state.datePreviewRequests) {
+            if (pendingKey === key) continue;
+            entry.controller.abort(); state.datePreviewRequests.delete(pendingKey);
+        }
+    }
+    function renderDatePreview(data) {
+        const preview = $('dateFormatPreview');
+        preview.removeAttribute('aria-busy');
+        preview.replaceChildren(...(data.samples || []).map(sample => node('span', `Row ${sample.row}: ${cellValue(sample.source)} → ${sample.parsed || sample.error || 'blank'}`)));
+        preview.style.display = 'flex';
         updateDateFormatLabel();
         $('documentDateSuggestion').textContent = data.dateSuggestion?.status === 'await_footing_validation'
             ? 'Validated transaction-date suggestions are available after checking Footing.'
             : `Suggested source dates: ${data.dateSuggestion?.start || 'unavailable'} to ${data.dateSuggestion?.end || 'unavailable'}. Confirm the full report period separately.`;
+    }
+    function showDatePreviewStatus(text, busy = false) {
+        const preview = $('dateFormatPreview');
+        preview.setAttribute('aria-busy', String(busy));
+        preview.replaceChildren(node('span', text));
+        preview.style.display = 'flex';
+    }
+    async function dates({ background = false } = {}) {
+        if (!state.context) return;
+        const key = datePreviewKey();
+        cancelObsoleteDatePreviewRequests(key);
+        const cached = readDatePreviewCache(key);
+        if (cached) { renderDatePreview(cached); return; }
+
+        let entry = state.datePreviewRequests.get(key);
+        if (!entry) {
+            entry = { controller: new AbortController(), promise: null };
+            const body = source('dates');
+            entry.promise = (async () => {
+                const data = requireOk(await request(filePath('prepare'), { method: 'POST', body,
+                    abortOnInvalidate: !background, controller: entry.controller }));
+                return { samples: data.samples || [], dateSuggestion: data.dateSuggestion || null };
+            })();
+            state.datePreviewRequests.set(key, entry);
+            entry.promise.then(result => {
+                if (state.datePreviewRequests.get(key) === entry) state.datePreviewRequests.delete(key);
+                if (datePreviewKey() === key) storeDatePreviewCache(key, result);
+            }, () => {
+                if (state.datePreviewRequests.get(key) === entry) state.datePreviewRequests.delete(key);
+            });
+        }
+        if (background) showDatePreviewStatus('Refreshing date guidance…', true);
+        try {
+            const result = await entry.promise;
+            if (datePreviewKey() !== key) return;
+            const current = readDatePreviewCache(key) || result;
+            if (!state.datePreviewCache.has(key)) storeDatePreviewCache(key, result);
+            renderDatePreview(current);
+        } catch (error) {
+            if (datePreviewKey() !== key) return;
+            if (!background) throw error;
+            showDatePreviewStatus(`Date guidance could not be refreshed: ${error.message}`);
+        }
     }
     function updateDateFormatLabel() {
         const delimiter = $('dateDelimiterDropdown').value;
@@ -437,6 +529,8 @@
     }
     function markDatePreviewStale() {
         const preview = $('dateFormatPreview');
+        cancelObsoleteDatePreviewRequests(datePreviewKey());
+        preview.removeAttribute('aria-busy');
         preview.replaceChildren(node('span', 'Format changed. Select “Preview dates” to check it.'));
         preview.style.display = 'flex';
     }

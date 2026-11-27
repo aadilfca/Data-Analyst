@@ -10642,3 +10642,9 @@ The isolated Release solution build passed with zero warnings/errors; the focuse
 Native C# upload mapping dropdowns now omit source column positions assigned to other template fields while retaining each field's current selection. Changing or clearing a mapping refreshes dropdown options in place, so a released column becomes available elsewhere without replacing the focused select. Existing preview, date and row-selection refresh handling remains in place.
 
 `node --check` and `git diff --check` passed. The standard Release build could not replace the API output DLL because it was locked by another process; an isolated Release build succeeded with zero warnings/errors and contained the updated `ShellFrontend/upload_native.js`. The local page on port 5080 refused the connection, so live-page verification remains pending. No tests were run and no server or database state changed.
+
+## C# upload mapping responsiveness — 2026-11-27
+
+Mapping changes now retain the workbook preview/page cache, recalculate key-row flags from cached cells, and redraw immediately without requesting a new full preview. Date guidance refreshes only when a date mapping changes; an eight-entry cache keys display results by workbook, sheet, configuration, date positions and format. Uncached date reads run without the page-wide loading guard, and obsolete date requests are cancelled. Validation and import remain server-authoritative.
+
+`node --check` and `git diff --check` passed. The isolated Release API build succeeded with zero warnings/errors; after the updated frontend was copied into the Release bundle, Aadil confirmed the dropdown remained responsive. No tests or database operations were run.

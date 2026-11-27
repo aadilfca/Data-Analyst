@@ -12,7 +12,7 @@ CA, non-CS developer. Explain tradeoffs in plain terms.
 ## Architecture (file map)
 One line per file group: what it is now. Full build history for every entry lives in `CHANGELOG_ARCHIVE.md`.
 
-- dotnet-uploader/ → Tenant-scoped C# APIs, durable jobs, independent frontend/tests, guarded upload staging and mappings, bounded previews, least-privilege grants, and tenant/client controls. See CHANGELOG_ARCHIVE.md.
+- dotnet-uploader/ → Tenant-scoped C# APIs, durable jobs, independent frontend/tests, guarded staging, cached responsive upload mappings/previews, bounded paging, least-privilege grants, and tenant/client controls. See CHANGELOG_ARCHIVE.md.
 - dotnet-uploader/src/AuditPlatform.Api/Verification/VerificationEvidenceService.cs → Scoped evidence links, Form/Physical Bill modal support, procedure checks, and observation persistence. See CHANGELOG_ARCHIVE.md.
 
 - routers/reconciliation.py + services/financial_statement_balances.py → Cashflows, statements, category-role notes with unallocated rows, profit links, reconciliations, diagnostics and exports. See CHANGELOG_ARCHIVE.md.
@@ -270,7 +270,7 @@ One line per file group: what it is now. Full build history for every entry live
 
 
 ## Status log
-- 2026-11-27: Native upload mappings reserve selected Excel columns across fields and release them when cleared. See Native upload mapping exclusivity.
+- 2026-11-27: Native upload mappings reserve source columns and reuse cached rows, with date refreshes kept non-blocking. See C# upload mapping responsiveness.
 - 2026-11-27: C# upload prepares a bounded full preview for browser-local paging; oversized previews fall back to adjacent batches. See C# full upload preview cache.
 - 2026-11-26: C# preview paging now uses local loading and cached rendering while preserving row choice and keyboard focus. See C# native upload preview paging.
 - 2026-11-25: Added tenant-admin-only C# client creation with separate least-privilege grants; client edits and deactivation remain gated. See C# tenant client creation.
