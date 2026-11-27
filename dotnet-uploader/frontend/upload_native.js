@@ -266,16 +266,32 @@
         if (!state.previewRows) prefetchRowPages(1, 1, generation, 1);
         await dates();
     }
+    function refreshMappingDropdownOptions() {
+        const selects = $('mappingBody').querySelectorAll('select[data-column-id]');
+        selects.forEach(select => {
+            const mapping = state.mappings.find(item => String(item.columnId) === select.dataset.columnId);
+            if (!mapping) return;
+
+            const selectedElsewhere = new Set(state.mappings
+                .filter(item => item !== mapping && item.sourcePosition !== null && item.sourcePosition !== undefined)
+                .map(item => Number(item.sourcePosition)));
+            const selectedPosition = mapping.sourcePosition == null ? '' : String(mapping.sourcePosition);
+            select.replaceChildren(node('option', '— None —', { value: '' }));
+            state.headers.forEach(header => {
+                if (selectedElsewhere.has(Number(header.position))) return;
+                select.append(node('option', `${header.position}: ${header.label || '(blank header)'}`, { value: header.position }));
+            });
+            select.value = selectedPosition;
+        });
+    }
     function renderMappings() {
         $('mappingBody').replaceChildren();
         state.mappings.forEach(mapping => {
             const tr = node('tr'); tr.append(node('td', mapping.name)); const td = node('td');
             const select = node('select', null, { 'aria-label': `${mapping.name}: Excel column`, 'data-column-id': mapping.columnId });
-            select.append(node('option', '— None —', { value: '' }));
-            state.headers.forEach(header => select.append(node('option', `${header.position}: ${header.label || '(blank header)'}`, { value: header.position })));
-            select.value = mapping.sourcePosition ?? '';
             select.addEventListener('change', () => {
                 invalidate(); mapping.sourcePosition = select.value ? Number(select.value) : null;
+                refreshMappingDropdownOptions();
                 state.excluded.clear(); state.forced.clear(); state.page = 1; state.previewRows = null; state.rowPageCache.clear(); controls();
                 const generation = state.generation;
                 void guarded(select, async () => {
@@ -286,6 +302,7 @@
             });
             td.append(select); tr.append(td, node('td', mapping.type), node('td', mapping.compare ? 'Compared' : 'Informational')); $('mappingBody').append(tr);
         });
+        refreshMappingDropdownOptions();
         $('mappingCount').textContent = `${state.mappings.filter(m => m.sourcePosition !== null).length}/${state.mappings.length} columns mapped`;
     }
     function rowPageKey(page) { return `${state.context.sha256}:${state.sheet}:${page}`; }
