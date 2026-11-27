@@ -1,5 +1,29 @@
 # Changelog Archive
 
+## C# full upload preview cache - 2026-11-27
+
+The C# upload preview now prepares the complete mapped row preview in one authorized request, capped at 64 MiB, and returns a compact response with workbook context only once. The browser retains the rows in memory and renders each ten-row page locally, so navigation within a complete preview makes no further row requests. File, sheet, and mapping changes clear and rebuild the preview; final validation/import remain server-authoritative.
+
+If the complete preview exceeds its cap, C# returns the first page and total count, retains its existing bounded process cache, and the browser falls back to six-page batches. No workbook data is persisted to PostgreSQL and no dependency or schema was added.
+
+Verification: isolated and normal Release API builds passed with zero warnings/errors; frontend syntax and `git diff --check` passed. The normal API output contains the updated preview frontend. Tray restart did not start the API, and direct startup returned 503 readiness, so authenticated browser acceptance remains pending. No tests, import, or data writes were run.
+
+## C# native upload preview paging - 2026-11-26
+
+Native preview navigation no longer uses the page-wide guarded loader. Cached pages render immediately; uncached requests keep current rows visible, show an accessible local loading state, and disable only the pager. Rows swap through a document fragment, and the pager is locked during initial preparation. Row choices and keyboard focus are preserved; API payloads and storage are unchanged.
+
+Verification: JavaScript syntax and diff checks passed; isolated Release build passed. Playwright used a synthetic workbook in the local C# shell, loading the current source through `/shell/upload_native.js`; the delayed Page 2 response was stubbed. The test confirmed pager locking during preparation, local busy status, cache-hit Back/Next, retained row selection/focus, and no global loader calls. No import occurred. The running packaged server was not replaced.
+
+## C# upload preview performance - 2026-11-26
+
+After candidate and approach approval, native row-choice previews now scan a staged sheet once to build a bounded process-local page cache keyed by client, template, file, source hash, sheet, and page size. The cache holds up to four entries and 8 MiB of serialized rows for ten minutes; source cells are never persisted to PostgreSQL. Cache hits rebuild row flags and exclusion states from the current request and still pass through owner, context, configuration, and before/after source-hash checks.
+
+The native frontend keeps up to eight visited pages and updates checkbox selections and counts locally. `WorkbookReader.ReadStaged` skips repeat ZIP expansion validation only after the staged receipt has passed full package/expansion checks; public `Read` and staging discovery retain their full checks. No schema, dependency, or Python upload change was made.
+
+Rows requests now return the requested page plus up to five following adjacent pages from the bounded process cache, subject to the configured response-size limit. The browser places returned pages in its existing bounded row cache, so normal sequential navigation avoids per-page API requests; a miss fetches another batch. Authorization, receipt, mapping, source freshness and row-choice checks still run for each batch. The HAR showed 3.2–6.2 second server wait times on individual requests with only 1–4 ms of response transfer, so reducing request count targets the observed delay; it does not remove the initial workbook scan or guarantee instant uncached jumps.
+
+Verification: the isolated .NET Release API build passed with zero warnings/errors; JavaScript syntax and `git diff --check` passed. The rebuilt server served the batch frontend, but `/health/app-ready` returned 503 and the upload page showed an API error after restart, so browser paging acceptance could not be completed. No tests, import, controlled timing benchmark, or data writes were run. The earlier HAR showed 3.2–6.2 second server wait with 1–4 ms transfer; this supports reducing request count but does not establish the new batch timing.
+
 ## C# Data Bank metrics batching — 2026-11-24
 
 Metrics reads now share the bounded template/column metadata query and count mapped document IDs for all templates in one parameterized SQL read instead of one round trip per template. Templates without a document role retain the row-count fallback; trimmed distinct values, tenant/client scope, authorization recheck, response limits, and output shape are preserved. No controller, frontend, schema, or Supabase data changed.

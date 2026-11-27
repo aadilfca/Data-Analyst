@@ -17,6 +17,25 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
     IOptions<UploadPreparationOptions> options)
 {
     private readonly SemaphoreSlim requests=new(options.Value.MaximumConcurrentRequests);
+    private const long PreviewCacheMaximumEntryBytes=4L*1024*1024;
+    private const long PreviewCacheMaximumBytes=8L*1024*1024;
+    private const int PreviewCacheMaximumEntries=4;
+    private static readonly TimeSpan PreviewCacheLifetime=TimeSpan.FromMinutes(10);
+    private static readonly object PreviewCacheGate=new();
+    private static readonly Dictionary<string,PreviewPageCache> PreviewPageCaches=new(StringComparer.Ordinal);
+    private static long previewPageCacheBytes;
+
+    private sealed class PreviewPageCache(WorkbookRow header,IReadOnlyDictionary<int,IReadOnlyList<WorkbookRow>> pages,
+        int totalRows,int lastRowNumber,long bytes)
+    {
+        public WorkbookRow Header {get;}=header;
+        public IReadOnlyDictionary<int,IReadOnlyList<WorkbookRow>> Pages {get;}=pages;
+        public int TotalRows {get;}=totalRows;
+        public int LastRowNumber {get;}=lastRowNumber;
+        public long Bytes {get;}=bytes;
+        public DateTime LastAccessUtc {get;set;}=DateTime.UtcNow;
+    }
+
     internal sealed class InvalidPreparation : Exception;
     private sealed class SizeStream(long maximum) : Stream
     {
@@ -42,11 +61,25 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
         deadline.CancelAfter(TimeSpan.FromSeconds(options.Value.TimeoutSeconds));
         try
         {
+            PreviewPageCache? cachedPreview=null;
+        if(input.Operation=="rows" && input.Sha256 is { } sourceHash
+                && TryGetPreviewCache(PreviewCacheKey(file,sourceHash,input),out var candidate)
+                && candidate.Pages.ContainsKey(input.Page)) cachedPreview=candidate;
             ct=deadline.Token;
+            int responseLimit=input.Operation=="preview"?options.Value.MaximumFullPreviewBytes:options.Value.MaximumResponseBytes;
             var result=await ReadBoundAsync(session,file,input,
-                (path,hash,template,snapshot,limits,token)=>Task.FromResult(Build(path,hash,file,template,snapshot,input,limits,options.Value.MaximumResponseBytes,token)),ct);
+                (path,hash,template,snapshot,limits,token)=>Task.FromResult(Build(path,hash,file,template,snapshot,input,limits,
+                    responseLimit,token,cachedPreview)),ct,cachedPreview is not null);
             if(result.Status!="success") return new(result.Status,Code:result.Code);
-            JsonSize(result.Value,options.Value.MaximumResponseBytes);
+            long outputLimit=input.Operation=="preview" && result.Value is {PreviewComplete:false}
+                ?options.Value.MaximumResponseBytes:responseLimit;
+            try {JsonSize(result.Value,outputLimit);}
+            catch(InvalidPreparation) when(input.Operation=="preview" && result.Value is {PreviewComplete:true,Rows:{} previewRows})
+            {
+                var fallback=result.Value with {Rows=previewRows.Take(input.PageSize).ToArray(),PreviewComplete=false,CachedPages=null};
+                JsonSize(fallback,options.Value.MaximumResponseBytes);
+                return new("success",fallback);
+            }
             return new("success",result.Value);
         }
         catch(OperationCanceledException) when(!callerCancellation.IsCancellationRequested && deadline.IsCancellationRequested)
@@ -60,30 +93,29 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
     // Shared by preparation and input validation. Parsing never holds database
     // locks, and callers cannot substitute their own template or saved revision.
     internal async Task<OwnedWorkbookResult<T>> ReadBoundAsync<T>(VerifiedSession? session,int file,PreparationRequest input,
-        Func<string,string,TemplateDefinition,MappingSnapshot,WorkbookReadLimits,CancellationToken,Task<T>> read,CancellationToken ct)
+        Func<string,string,TemplateDefinition,MappingSnapshot,WorkbookReadLimits,CancellationToken,Task<T>> read,CancellationToken ct,
+        bool verifiedPreviewCacheHit=false)
     {
         if(!options.Value.Enabled) return new("unavailable");
         if(!Valid(input,file)) return new("invalid",Code:"invalid_preparation");
-        var saved=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
-        if(saved.Status!=MappingStatus.Success) return new(saved.Status==MappingStatus.Review?"review":"forbidden",Code:"mapping_unavailable");
-        var snapshot=saved.Snapshot!;
-        if(snapshot.NeedsReview) return new("review",Code:"saved_mapping_needs_review");
-        if(input.MappingRevision is not null && input.MappingRevision!=snapshot.Revision
-            || input.ConfigurationKey is not null && input.ConfigurationKey!=snapshot.ConfigurationKey)
-            return new("conflict",Code:"preparation_context_changed");
-        var result=await staging.ReadOwnedAsync(session,input.ClientId,input.TemplateId,file,input.Sha256,snapshot.ConfigurationKey,
-            (path,hash,template,limits,token)=>read(path,hash,template,snapshot,limits,token),ct);
-        if(result.Status!="success") return result;
-        var after=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
-        if(after.Status!=MappingStatus.Success) return new("forbidden");
-        if(after.Snapshot is null || after.Snapshot.NeedsReview || after.Snapshot.Revision!=snapshot.Revision
-            || after.Snapshot.ConfigurationKey!=snapshot.ConfigurationKey) return new("conflict",Code:"preparation_context_changed");
+        var result=await staging.ReadOwnedWithMappingAsync(session,input.ClientId,input.TemplateId,file,input.Sha256,
+            input.MappingRevision,input.ConfigurationKey,savedMappings.ReadWithinAuthorizedContextAsync,
+            verifiedPreviewCacheHit,
+            (path,hash,template,snapshot,limits,token)=>read(path,hash,template,snapshot,limits,token),ct);
+        // Preserve P14's review response when the stricter upload boundary
+        // rejects a template before its saved mapping can be read in-transaction.
+        if(result.Status=="forbidden")
+        {
+            var saved=await savedMappings.ReadAsync(session,input.ClientId,input.TemplateId,ct);
+            if(saved.Status!=MappingStatus.Success)
+                return new(saved.Status==MappingStatus.Review?"review":"forbidden",Code:"mapping_unavailable");
+        }
         return result;
     }
 
     private bool Valid(PreparationRequest r,int file)=>file>0 && r.ClientId>0 && r.TemplateId>0 && r.RequestId!=Guid.Empty
-        && !string.IsNullOrWhiteSpace(r.Sheet) && r.Sheet.Length<=255 && r.Operation is "map" or "dates" or "rows"
-        && r.Page>0 && r.Page<=1048576 && r.PageSize is >=1 and <=100
+        && !string.IsNullOrWhiteSpace(r.Sheet) && r.Sheet.Length<=255 && r.Operation is "map" or "dates" or "rows" or "preview"
+        && r.Page>0 && r.Page<=1048576 && r.PageSize is >=1 and <=100 && r.PageCount is >=1 and <=8
         && UploadDateParser.ValidFormat(r.DateDelimiter??"/",(r.DateOrder??"DMY").ToUpperInvariant())
         && (r.Sha256 is null || Regex.IsMatch(r.Sha256,"^[a-f0-9]{64}$",RegexOptions.CultureInvariant))
         && (r.ConfigurationKey is null || r.ConfigurationKey.Length==64) && (r.MappingRevision is null or >=0)
@@ -185,37 +217,41 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
     }
 
     private static PreparationOutput Build(string path,string hash,int file,TemplateDefinition template,MappingSnapshot saved,
-        PreparationRequest input,WorkbookReadLimits limits,int maximumResponseBytes,CancellationToken ct)
+        PreparationRequest input,WorkbookReadLimits limits,int maximumResponseBytes,CancellationToken ct,PreviewPageCache? verifiedCache=null)
     {
-        using var rows=WorkbookReader.Read(path,".xls",input.Sheet,limits,ct).GetEnumerator();
+        var excluded=(input.ExcludedRows??[]).ToHashSet();var forced=(input.ForceIncludeRows??[]).ToHashSet();
+        string cacheKey=PreviewCacheKey(file,hash,input);
+        PreviewPageCache? cached=verifiedCache;
+        if(cached is null && input.Operation=="rows" && TryGetPreviewCache(cacheKey,out var current)) cached=current;
+        if(input.Operation=="rows" && cached is not null && cached.Pages.TryGetValue(input.Page,out var cachedRows))
+        {
+            var cachedSource=ResolveSource(cached.Header.Cells,hash,file,template,saved,input);
+            return BuildRowsOutput(cachedSource,cachedRows,cached.TotalRows,cached.LastRowNumber,input,excluded,forced,
+                maximumResponseBytes,cached.Pages);
+        }
+
+        using var rows=WorkbookReader.ReadStaged(path,".xls",input.Sheet,limits,ct).GetEnumerator();
         if(!rows.MoveNext()) throw new InvalidPreparation();
-        var source=ResolveSource(rows.Current.Cells,hash,file,template,saved,input);
+        var header=rows.Current;
+        var source=ResolveSource(header.Cells,hash,file,template,saved,input);
         var (context,headers,mappings,warnings)=(source.Context,source.Headers,source.Mappings,source.Warnings);
         string delimiter=input.DateDelimiter??"/",order=(input.DateOrder??"DMY").ToUpperInvariant();
-        var excluded=(input.ExcludedRows??[]).ToHashSet();var forced=(input.ForceIncludeRows??[]).ToHashSet();
         if(input.Operation=="map") return new(context,headers,mappings,warnings);
+        if(input.Operation=="rows")
+            return BuildRows(rows,header,source,input,excluded,forced,maximumResponseBytes,ct,cacheKey);
+        if(input.Operation=="preview")
+            return BuildFullPreview(rows,header,source,input,excluded,forced,maximumResponseBytes,ct,cacheKey);
+
         var dateMappings=mappings.Where(m=>m.Type=="Date" && m.SourcePosition is not null).ToArray();
         var samples=new List<PreparedDateSample>(); long sampleBytes=0; var counts=dateMappings.ToDictionary(m=>m.ColumnId,_=>0);
-        var preview=new List<PreparedRow>(); int total=0,last=1; long previewBytes=0; DateTime? first=null,end=null; int dates=0;
+        DateTime? first=null,end=null; int dates=0;
         bool footing=template.Columns.Any(c=>c.Role=="footing");
         var documentDate=mappings.SingleOrDefault(m=>m.Role=="document_date");
         bool scanDates=input.Operation=="dates" && !footing && documentDate?.SourcePosition is not null;
-        int key=(mappings.SingleOrDefault(m=>m.Role=="document_id")??mappings.FirstOrDefault())?.SourcePosition??0;
         while(rows.MoveNext())
         {
-            ct.ThrowIfCancellationRequested(); var row=rows.Current; last=row.Number; total++;
+            ct.ThrowIfCancellationRequested(); var row=rows.Current;
             WorkbookCell Cell(int position)=>row.Cells.FirstOrDefault(c=>c.Column==position)??new(row.Number,position,WorkbookCellKind.Blank);
-            if(input.Operation=="rows" && total>(long)(input.Page-1)*input.PageSize && preview.Count<input.PageSize)
-            {
-                var identity=Cell(key);
-                bool flagged=key>0 && (identity.Kind==WorkbookCellKind.Blank || identity.Kind==WorkbookCellKind.Text
-                    && (string.IsNullOrWhiteSpace(identity.Text)||identity.Text.Contains("total",StringComparison.OrdinalIgnoreCase)));
-                var item=new PreparedRow(row.Number,row.Cells,flagged,excluded.Contains(row.Number),forced.Contains(row.Number));
-                // Bound retained page bytes before retaining another large row.
-                previewBytes+=JsonSize(item,maximumResponseBytes-previewBytes);
-                preview.Add(item);
-            }
-            if(input.Operation!="dates") continue;
             foreach(var mapping in dateMappings)
             {
                 var cell=Cell(mapping.SourcePosition!.Value); DateTime? parsed=null; string? error=null;
@@ -231,12 +267,194 @@ public sealed class UploadPreparationService(UploadStagingService staging,Tenant
             }
             if(!scanDates && counts.Values.All(n=>n>=3)) break;
         }
-        // Only a full row scan can validate caller row positions. Date previews
-        // do not apply selection/override choices or certify import eligibility.
-        if(input.Operation=="rows" && (excluded.Any(n=>n>last)||forced.Any(n=>n>last))) throw new InvalidPreparation();
         var suggestion=new PreparedDateSuggestion(footing?"await_footing_validation":documentDate is null?"configure_document_date"
             :documentDate.SourcePosition is null?"map_document_date":"ready",first?.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture),end?.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture),dates);
-        return new(context,headers,mappings,warnings,input.Operation=="dates"?samples:null,input.Operation=="dates"?suggestion:null,
-            input.Operation=="rows"?preview:null,input.Operation=="rows"?total:null,input.Operation=="rows"?total-excluded.Count:null);
+        return new(context,headers,mappings,warnings,samples,suggestion,null,null,null);
+    }
+
+    private static PreparationOutput BuildRows(IEnumerator<WorkbookRow> rows,WorkbookRow header,PreparedSource source,
+        PreparationRequest input,HashSet<int> excluded,HashSet<int> forced,int maximumResponseBytes,
+        CancellationToken ct,string cacheKey)
+    {
+        var pages=new Dictionary<int,IReadOnlyList<WorkbookRow>>();
+        long cacheBytes=0;
+        bool cacheHeader=TryJsonSize(header.Cells,PreviewCacheMaximumEntryBytes,out cacheBytes);
+        long headerBytes=cacheBytes;
+        int cacheStartPage=Math.Max(1,input.Page-8);
+        var pending=new List<WorkbookRow>(input.PageSize); int pageNumber=1,total=0,last=header.Number;
+        IReadOnlyList<WorkbookRow>? requestedPage=null;
+        while(rows.MoveNext())
+        {
+            ct.ThrowIfCancellationRequested(); var row=rows.Current; last=row.Number; total++; pending.Add(row);
+            if(pending.Count==input.PageSize) SavePage();
+        }
+        if(pending.Count>0) SavePage();
+        if(excluded.Any(n=>n>last)||forced.Any(n=>n>last)) throw new InvalidPreparation();
+
+        if(cacheHeader && pages.Count>0)
+            StorePreviewCache(cacheKey,new(header,pages,total,last,cacheBytes));
+        var selected=requestedPage??Array.Empty<WorkbookRow>();
+        return BuildRowsOutput(source,selected,total,last,input,excluded,forced,maximumResponseBytes,pages);
+
+        void SavePage()
+        {
+            var page=pending.ToArray();
+            if(pageNumber==input.Page) requestedPage=page;
+            long pageBytes;
+            if(cacheHeader && pageNumber>=cacheStartPage && TryJsonSize(page,PreviewCacheMaximumEntryBytes-cacheBytes,out pageBytes))
+            {pages[pageNumber]=page;cacheBytes+=pageBytes;}
+            else if(cacheHeader && pageNumber==input.Page)
+            {
+                pages.Clear(); cacheBytes=headerBytes;
+                if(TryJsonSize(page,PreviewCacheMaximumEntryBytes-cacheBytes,out pageBytes))
+                {pages[pageNumber]=page;cacheBytes+=pageBytes;}
+            }
+            pending.Clear(); pageNumber++;
+        }
+    }
+
+    private static PreparationOutput BuildFullPreview(IEnumerator<WorkbookRow> rows,WorkbookRow header,PreparedSource source,
+        PreparationRequest input,HashSet<int> excluded,HashSet<int> forced,int maximumResponseBytes,
+        CancellationToken ct,string cacheKey)
+    {
+        var fullRows=new List<PreparedRow>(); var firstPage=new List<PreparedRow>(input.PageSize);
+        var empty=new PreparationOutput(source.Context,source.Headers,source.Mappings,source.Warnings,
+            Rows:Array.Empty<PreparedRow>(),TotalRows:0,SelectedRows:0,PreviewComplete:true);
+        int key=(source.Mappings.SingleOrDefault(m=>m.Role=="document_id")??source.Mappings.FirstOrDefault())?.SourcePosition??0;
+        long previewBytes=JsonSize(empty,maximumResponseBytes); bool complete=true;
+        var pages=new Dictionary<int,IReadOnlyList<WorkbookRow>>();
+        long cacheBytes=0; bool cacheHeader=TryJsonSize(header.Cells,PreviewCacheMaximumEntryBytes,out cacheBytes);
+        long headerBytes=cacheBytes; int cacheStartPage=Math.Max(1,input.Page-8);
+        var pending=new List<WorkbookRow>(input.PageSize); int pageNumber=1,total=0,last=header.Number;
+
+        while(rows.MoveNext())
+        {
+            ct.ThrowIfCancellationRequested(); var row=rows.Current; total++; last=row.Number;
+            var prepared=PrepareRow(row,key,excluded,forced);
+            if(firstPage.Count<input.PageSize) firstPage.Add(prepared);
+            if(complete)
+            {
+                try
+                {
+                    long rowBytes=JsonSize(prepared,maximumResponseBytes-previewBytes-1);
+                    if(previewBytes+rowBytes+1>maximumResponseBytes) complete=false;
+                    else {fullRows.Add(prepared);previewBytes+=rowBytes+1;}
+                }
+                catch(InvalidPreparation) {complete=false;}
+                if(!complete) fullRows.Clear();
+            }
+            pending.Add(row);
+            if(pending.Count==input.PageSize) SavePage();
+        }
+        if(pending.Count>0) SavePage();
+        if(excluded.Any(n=>n>last)||forced.Any(n=>n>last)) throw new InvalidPreparation();
+        if(cacheHeader && pages.Count>0)
+            StorePreviewCache(cacheKey,new(header,pages,total,last,cacheBytes));
+
+        if(complete)
+        {
+            var output=new PreparationOutput(source.Context,source.Headers,source.Mappings,source.Warnings,
+                Rows:fullRows,TotalRows:total,SelectedRows:total-excluded.Count,PreviewComplete:true);
+            return output;
+        }
+        return new(source.Context,source.Headers,source.Mappings,source.Warnings,
+            Rows:firstPage,TotalRows:total,SelectedRows:total-excluded.Count,PreviewComplete:false);
+
+        void SavePage()
+        {
+            var page=pending.ToArray(); long pageBytes;
+            if(cacheHeader && pageNumber>=cacheStartPage
+                && TryJsonSize(page,PreviewCacheMaximumEntryBytes-cacheBytes,out pageBytes))
+            {pages[pageNumber]=page;cacheBytes+=pageBytes;}
+            else if(cacheHeader && pageNumber==input.Page)
+            {
+                pages.Clear(); cacheBytes=headerBytes;
+                if(TryJsonSize(page,PreviewCacheMaximumEntryBytes-cacheBytes,out pageBytes))
+                {pages[pageNumber]=page;cacheBytes+=pageBytes;}
+            }
+            pending.Clear(); pageNumber++;
+        }
+    }
+
+    private static PreparationOutput BuildRowsOutput(PreparedSource source,IReadOnlyList<WorkbookRow> rows,int total,int last,
+        PreparationRequest input,HashSet<int> excluded,HashSet<int> forced,int maximumResponseBytes,
+        IReadOnlyDictionary<int,IReadOnlyList<WorkbookRow>> availablePages)
+    {
+        if(excluded.Any(n=>n>last)||forced.Any(n=>n>last)) throw new InvalidPreparation();
+        int key=(source.Mappings.SingleOrDefault(m=>m.Role=="document_id")??source.Mappings.FirstOrDefault())?.SourcePosition??0;
+        var preview=new List<PreparedRow>(rows.Count); long previewBytes=0;
+        foreach(var row in rows)
+        {
+            var item=PrepareRow(row,key,excluded,forced);
+            previewBytes+=JsonSize(item,maximumResponseBytes-previewBytes); preview.Add(item);
+        }
+        var output=new PreparationOutput(source.Context,source.Headers,source.Mappings,source.Warnings,null,null,preview,total,total-excluded.Count);
+        var included=new List<PreparationPage>();
+        for(int page=input.Page+1;page<input.Page+input.PageCount;page++)
+        {
+            if(!availablePages.TryGetValue(page,out var pageRows)) break;
+            var pageOutput=new PreparationPage(page,PrepareRows(pageRows));
+            included.Add(pageOutput);
+            try {JsonSize(output with {CachedPages=included},maximumResponseBytes);}
+            catch(InvalidPreparation) {included.RemoveAt(included.Count-1);break;}
+        }
+        return included.Count==0?output:output with {CachedPages=included};
+
+        IReadOnlyList<PreparedRow> PrepareRows(IReadOnlyList<WorkbookRow> pageRows)
+        {
+            var result=new List<PreparedRow>(pageRows.Count);
+            foreach(var row in pageRows) result.Add(PrepareRow(row,key,excluded,forced));
+            return result;
+        }
+    }
+
+    private static PreparedRow PrepareRow(WorkbookRow row,int key,HashSet<int> excluded,HashSet<int> forced)
+    {
+        var identity=row.Cells.FirstOrDefault(c=>c.Column==key)??new(row.Number,key,WorkbookCellKind.Blank);
+        bool flagged=key>0 && (identity.Kind==WorkbookCellKind.Blank || identity.Kind==WorkbookCellKind.Text
+            && (string.IsNullOrWhiteSpace(identity.Text)||identity.Text.Contains("total",StringComparison.OrdinalIgnoreCase)));
+        return new(row.Number,row.Cells,flagged,excluded.Contains(row.Number),forced.Contains(row.Number));
+    }
+
+    private static string PreviewCacheKey(int file,string hash,PreparationRequest input)=>Convert.ToHexString(SHA256.HashData(
+        JsonSerializer.SerializeToUtf8Bytes(new {file,input.ClientId,input.TemplateId,input.Sheet,input.PageSize,hash})));
+
+    private static bool TryJsonSize<T>(T value,long maximum,out long size)
+    {
+        try {size=JsonSize(value,maximum);return true;}
+        catch(InvalidPreparation) {size=0;return false;}
+    }
+
+    private static bool TryGetPreviewCache(string key,out PreviewPageCache cache)
+    {
+        lock(PreviewCacheGate)
+        {
+            RemoveExpiredPreviewCaches(DateTime.UtcNow);
+            if(PreviewPageCaches.TryGetValue(key,out cache!)) {cache.LastAccessUtc=DateTime.UtcNow;return true;}
+        }
+        cache=null!; return false;
+    }
+
+    private static void StorePreviewCache(string key,PreviewPageCache cache)
+    {
+        if(cache.Bytes>PreviewCacheMaximumEntryBytes || cache.Pages.Count==0) return;
+        lock(PreviewCacheGate)
+        {
+            RemoveExpiredPreviewCaches(DateTime.UtcNow);
+            if(PreviewPageCaches.Remove(key,out var previous)) previewPageCacheBytes-=previous.Bytes;
+            while(PreviewPageCaches.Count>=PreviewCacheMaximumEntries || previewPageCacheBytes+cache.Bytes>PreviewCacheMaximumBytes)
+            {
+                var oldest=PreviewPageCaches.MinBy(item=>item.Value.LastAccessUtc);
+                if(oldest.Value is null) break;
+                PreviewPageCaches.Remove(oldest.Key); previewPageCacheBytes-=oldest.Value.Bytes;
+            }
+            PreviewPageCaches[key]=cache; previewPageCacheBytes+=cache.Bytes;
+        }
+    }
+
+    private static void RemoveExpiredPreviewCaches(DateTime now)
+    {
+        foreach(var item in PreviewPageCaches.Where(item=>now-item.Value.LastAccessUtc>PreviewCacheLifetime).ToArray())
+        {PreviewPageCaches.Remove(item.Key);previewPageCacheBytes-=item.Value.Bytes;}
     }
 }

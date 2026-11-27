@@ -4,11 +4,12 @@
     'use strict';
     const $ = id => document.getElementById(id);
     const uuid = () => crypto.randomUUID();
+    const MAXIMUM_PREVIEW_BYTES = 64 * 1024 * 1024;
     const terminal = new Set(['succeeded', 'cancelled', 'failed', 'expired', 'review_required']);
     const controllers = new Set();
     const state = { generation: 0, client: null, template: null, catalog: [], columns: [], file: null,
         staging: null, sheet: '', context: null, mappings: [], headers: [], excluded: new Set(), forced: new Set(),
-        page: 1, pages: 1, busy: false, review: null, coverage: null, plan: null, pending: null,
+        page: 1, pages: 1, totalRows: 0, previewRows: null, rowPageCache: new Map(), rowPageLoads: new Map(), pageBusy: false, pageRequest: 0, busy: false, review: null, coverage: null, plan: null, pending: null,
         job: null, handle: null, receipt: null, timer: null, pollFailures: 0, issuePage: 1 };
     const cacheKey = 'native-upload-handle-v1';
     let notice, reviewPanel, jobPanel, receiptPanel, detailPanel;
@@ -106,6 +107,7 @@
     function activeJob() { return !!state.handle && (!state.job || !terminal.has(state.job.state)); }
     function invalidate() {
         ++state.generation;
+        ++state.pageRequest; state.pageBusy = false; setPageLoading(false);
         controllers.forEach(controller => controller.abort());
         state.review = null; state.coverage = null; state.plan = null; state.receipt = null;
         reviewPanel.hidden = true; receiptPanel.hidden = true;
@@ -123,6 +125,11 @@
         $('downloadBtn').disabled = state.busy || !state.columns.length;
         $('importBtn').disabled = locked || !state.file || !state.context || state.catalog.find(t => t.id === state.template)?.data_purpose === 'account_ledger';
         $('previewBtn').disabled = locked || !state.context;
+        const pageLocked = locked || state.pageBusy || !state.context;
+        $('rowExclusionFirstPage').disabled = pageLocked || state.page <= 1;
+        $('rowExclusionPrevPage').disabled = pageLocked || state.page <= 1;
+        $('rowExclusionNextPage').disabled = pageLocked || state.page >= state.pages;
+        $('rowExclusionLastPage').disabled = pageLocked || state.page >= state.pages;
         $('mappingBody').querySelectorAll('select').forEach(el => el.disabled = locked);
         $('rowExclusionBody').querySelectorAll('input').forEach(el => el.disabled = locked || $('comparisonModeDropdown').value === 'replace_range');
         $('nativeSubmit').disabled = locked || !state.review || !$('nativeImportConfirmation').checked;
@@ -145,6 +152,13 @@
         // Numeric tokens remain strings; never pass financial evidence through Number().
         return cell?.numberToken ?? cell?.text ?? cell?.dateTime ?? cell?.time ?? (cell?.boolean === undefined || cell?.boolean === null ? '' : String(cell.boolean));
     }
+    function setPageLoading(loading, page = state.page) {
+        const panel = $('rowExclusionContainer'), status = $('rowExclusionLoading');
+        if (!panel || !status) return;
+        panel.setAttribute('aria-busy', String(loading));
+        status.textContent = loading ? `Loading page ${page}…` : '';
+        status.classList.toggle('is-loading', loading);
+    }
     function table(parent, headers, rows) {
         const output = node('table'); const head = node('thead'); const line = node('tr');
         headers.forEach(label => line.append(node('th', label))); head.append(line); output.append(head);
@@ -160,7 +174,7 @@
             mappings: state.mappings.map(m => ({ columnId: m.columnId, sourcePosition: m.sourcePosition })),
             dateDelimiter: $('dateDelimiterDropdown').value, dateOrder: $('dateOrderDropdown').value,
             excludedRows: [...state.excluded].sort((a, b) => a - b), forceIncludeRows: [...state.forced].sort((a, b) => a - b),
-            page, pageSize: 10, requestId: uuid() };
+            page, pageSize: 10, pageCount: operation === 'rows' ? 6 : 1, requestId: uuid() };
     }
     function coverage() {
         const row = $('sourceControlRow').value;
@@ -174,8 +188,8 @@
             expectedCoverageKey: $('nativeConfirmVariance').checked ? prior?.coverageKey : null };
     }
     function clearSource() {
-        invalidate(); state.file = null; state.staging = null; state.context = null; state.mappings = []; state.headers = [];
-        state.excluded.clear(); state.forced.clear(); state.sheet = ''; state.page = 1;
+        invalidate(); state.file = null; state.staging = null; state.context = null; state.mappings = []; state.headers = []; state.previewRows = null;
+        state.excluded.clear(); state.forced.clear(); state.sheet = ''; state.page = 1; state.pages = 1; state.totalRows = 0; state.rowPageCache.clear();
         $('sheetSelector').replaceChildren(); $('mappingBody').replaceChildren(); $('rowExclusionBody').replaceChildren();
         ['mappingPanel', 'leftPanel', 'modeActions', 'sheetField', 'fileInfo', 'dateFormatGroup', 'rowExclusionContainer'].forEach(id => $(id).style.display = 'none');
         ['uploadCoverageStart', 'uploadCoverageEnd', 'sourceControlRow'].forEach(id => $(id).value = '');
@@ -235,7 +249,7 @@
         await prepare();
     }
     async function prepare() {
-        invalidate(); const generation = state.generation; state.context = null; state.page = 1;
+        invalidate(); const generation = state.generation; state.context = null; state.page = 1; state.pages = 1; state.totalRows = 0; state.previewRows = null; state.rowPageCache.clear();
         state.excluded.clear(); state.forced.clear();
         $('mappingPanel').style.display = 'block'; $('leftPanel').style.display = 'block';
         const data = requireOk(await request(filePath('prepare'), { method: 'POST', body: {
@@ -248,7 +262,9 @@
         ['modeActions', 'dateFormatGroup', 'rowExclusionContainer'].forEach(id => $(id).style.display = 'block');
         $('sourceControlPanel').hidden = !data.mappings.some(m => m.role === 'footing');
         message(data.warnings?.join(' ') || 'Review the mapped columns, total row and report coverage.');
-        await rows(); await dates();
+        await loadPreview(generation);
+        if (!state.previewRows) prefetchRowPages(1, 1, generation, 1);
+        await dates();
     }
     function renderMappings() {
         $('mappingBody').replaceChildren();
@@ -260,20 +276,82 @@
             select.value = mapping.sourcePosition ?? '';
             select.addEventListener('change', () => {
                 invalidate(); mapping.sourcePosition = select.value ? Number(select.value) : null;
-                state.excluded.clear(); state.forced.clear(); state.page = 1; controls();
-                void guarded(select, async () => { await rows(); await dates(); });
+                state.excluded.clear(); state.forced.clear(); state.page = 1; state.previewRows = null; state.rowPageCache.clear(); controls();
+                const generation = state.generation;
+                void guarded(select, async () => {
+                    await loadPreview(generation);
+                    if (!state.previewRows) prefetchRowPages(1, 1, generation, 1);
+                    await dates();
+                });
             });
             td.append(select); tr.append(td, node('td', mapping.type), node('td', mapping.compare ? 'Compared' : 'Informational')); $('mappingBody').append(tr);
         });
         $('mappingCount').textContent = `${state.mappings.filter(m => m.sourcePosition !== null).length}/${state.mappings.length} columns mapped`;
     }
-    async function rows() {
-        if (!state.context) return; const generation = state.generation;
-        const data = requireOk(await request(filePath('prepare'), { method: 'POST', body: source('rows') }));
+    function rowPageKey(page) { return `${state.context.sha256}:${state.sheet}:${page}`; }
+    async function loadPreview(generation) {
+        if (!state.context || generation !== state.generation) return;
+        const data = requireOk(await request(filePath('prepare'), {
+            method: 'POST', body: source('preview', 1), timeout: 120000, maximum: MAXIMUM_PREVIEW_BYTES
+        }));
         if (generation !== state.generation) return;
-        state.pages = Math.max(1, Math.ceil(data.totalRows / 10));
+        state.totalRows = data.totalRows;
+        state.pages = Math.max(1, Math.ceil(state.totalRows / 10));
+        if (data.previewComplete === true) {
+            if (!Array.isArray(data.rows) || data.rows.length !== state.totalRows)
+                throw new Error('The complete preview response did not match its row count. Prepare the workbook again.');
+            state.previewRows = data.rows;
+            state.rowPageCache.clear();
+        } else {
+            if (!Array.isArray(data.rows) || data.rows.length > 10)
+                throw new Error('The bounded preview response was incomplete. Prepare the workbook again.');
+            state.previewRows = null;
+            state.rowPageCache.clear();
+            state.rowPageCache.set(rowPageKey(1), data);
+            message('This workbook exceeds the full-preview memory limit; navigation will use bounded page batches.');
+        }
+        await rows(1);
+    }
+    async function loadRowPage(page, generation) {
+        if (!state.context || generation !== state.generation) return null;
+        const key = rowPageKey(page), cached = state.rowPageCache.get(key);
+        if (cached) return cached;
+        let pending = state.rowPageLoads.get(key);
+        if (!pending) {
+            pending = (async () => {
+                const data = requireOk(await request(filePath('prepare'), { method: 'POST', body: source('rows', page) }));
+                if (generation === state.generation) {
+                    state.rowPageCache.set(key, data);
+                    (data.cachedPages || []).forEach(page => {
+                        state.rowPageCache.set(rowPageKey(page.page), { ...data, rows: page.rows, cachedPages: [] });
+                    });
+                    while (state.rowPageCache.size > 8) state.rowPageCache.delete(state.rowPageCache.keys().next().value);
+                }
+                return data;
+            })();
+            state.rowPageLoads.set(key, pending);
+        }
+        try { return await pending; }
+        finally { if (state.rowPageLoads.get(key) === pending) state.rowPageLoads.delete(key); }
+    }
+    function prefetchRowPages(page, direction, generation, count = 2) {
+        for (let offset = 1; offset <= count; offset++) {
+            const target = page + direction * offset;
+            if (!state.context || generation !== state.generation || target < 1 || target > state.pages) continue;
+            void loadRowPage(target, generation).catch(() => {});
+        }
+    }
+    async function rows(page = state.page) {
+        if (!state.context) return; const generation = state.generation;
+        const data = state.previewRows
+            ? { rows: state.previewRows.slice((page - 1) * 10, page * 10), totalRows: state.totalRows }
+            : await loadRowPage(page, generation);
+        if (generation !== state.generation) return;
+        state.totalRows = data.totalRows;
+        state.pages = Math.max(1, Math.ceil(state.totalRows / 10));
+        state.page = page;
         $('rowExclusionHeadRow').replaceChildren(node('th', 'Include'), node('th', 'Excel row'), ...state.headers.map(h => node('th', h.label || `Column ${h.position}`)));
-        $('rowExclusionBody').replaceChildren();
+        const pageRows = document.createDocumentFragment();
         (data.rows || []).forEach(row => {
             const tr = node('tr'); const td = node('td'); const check = node('input', null, { type: 'checkbox', 'aria-label': `Include Excel row ${row.number}` });
             check.checked = !state.excluded.has(row.number);
@@ -282,15 +360,48 @@
                 if (check.checked) state.excluded.delete(row.number);
                 else if (state.excluded.size < 10000) { state.excluded.add(row.number); state.forced.delete(row.number); }
                 else { check.checked = true; message('At most 10,000 explicit row choices are supported.', 'error'); }
-                controls(); void guarded(check, rows);
+                $('rowExclusionCounter').textContent = `${state.totalRows - state.excluded.size} of ${state.totalRows} physical rows selected; validation determines eligible detail rows`;
+                controls();
             }); td.append(check); tr.append(td, node('td', String(row.number) + (row.flagged ? ' ⚠' : '')));
             state.headers.forEach(header => tr.append(node('td', cellValue(row.cells.find(c => c.column === header.position)), { class: 'native-upload-number' })));
-            $('rowExclusionBody').append(tr);
+            pageRows.append(tr);
         });
-        $('rowExclusionCounter').textContent = `${data.selectedRows} of ${data.totalRows} physical rows selected; validation determines eligible detail rows`;
+        $('rowExclusionBody').replaceChildren(pageRows);
+        $('rowExclusionCounter').textContent = `${state.totalRows - state.excluded.size} of ${state.totalRows} physical rows selected; validation determines eligible detail rows`;
         $('rowExclusionPageInfo').textContent = `Page ${state.page} of ${state.pages}`;
         $('rowExclusionRange').textContent = `${data.totalRows} source rows; total rows and notes are classified separately`;
         controls();
+    }
+    async function navigatePage(targetPage) {
+        if (state.busy || state.pageBusy || !state.context) return;
+        const target = Math.max(1, Math.min(state.pages, targetPage));
+        if (target === state.page) return;
+        if (state.previewRows) {
+            await rows(target);
+            return;
+        }
+        const key = `${state.context.sha256}:${state.sheet}:${target}`;
+        if (state.rowPageCache.has(key)) {
+            await rows(target);
+            return;
+        }
+        const generation = state.generation, request = ++state.pageRequest, direction = Math.sign(target - state.page);
+        const focusedPager = document.activeElement?.id;
+        state.pageBusy = true; setPageLoading(true, target); controls();
+        try { await rows(target); if (generation === state.generation) prefetchRowPages(target, direction, generation); }
+        catch (error) {
+            if (request === state.pageRequest && generation === state.generation) message(error.message, 'error');
+        }
+        finally {
+            if (request === state.pageRequest) {
+                state.pageBusy = false; setPageLoading(false); controls();
+                if (focusedPager && document.activeElement === document.body) {
+                    const preferred = $(focusedPager);
+                    const fallback = state.page < state.pages ? $('rowExclusionNextPage') : $('rowExclusionPrevPage');
+                    (preferred && !preferred.disabled ? preferred : fallback).focus({ preventScroll: true });
+                }
+            }
+        }
     }
     async function dates() {
         if (!state.context) return; const generation = state.generation;
@@ -632,7 +743,7 @@
         ['uploadCoverageStart', 'uploadCoverageEnd', 'sourceControlRow'].forEach(id => $(id).addEventListener('input', () => { invalidate(); if (id === 'sourceControlRow') $('sourceControlConfirmed').checked = false; controls(); }));
         $('nativeImportConfirmation').addEventListener('change', controls);
         $('nativeConfirmVariance').addEventListener('change', () => { state.review = null; state.plan = null; reviewPanel.hidden = true; controls(); });
-        [['rowExclusionFirstPage', () => 1], ['rowExclusionPrevPage', () => Math.max(1, state.page - 1)], ['rowExclusionNextPage', () => Math.min(state.pages, state.page + 1)], ['rowExclusionLastPage', () => state.pages]].forEach(([id, page]) => $(id).addEventListener('click', () => void guarded($(id), async () => { state.page = page(); await rows(); })));
+        [['rowExclusionFirstPage', () => 1], ['rowExclusionPrevPage', () => state.page - 1], ['rowExclusionNextPage', () => state.page + 1], ['rowExclusionLastPage', () => state.pages]].forEach(([id, page]) => $(id).addEventListener('click', () => void navigatePage(page())));
         let handle; const url = new URL(location.href);
         if (url.searchParams.has('upload_job')) handle = { job: url.searchParams.get('upload_job'), file: Number(url.searchParams.get('upload_file')), client: Number(url.searchParams.get('upload_client')), template: Number(url.searchParams.get('upload_template')) };
         else try { handle = JSON.parse(sessionStorage.getItem(cacheKey) || 'null'); } catch (_) {}
